@@ -246,9 +246,9 @@ flowchart LR
     S --> P[Proposed]
     P --> AP[Approved]
     P --> RJ[Rejected]
-    Q -.item.error.-> F[Failed]
-    G -.item.error.-> F
-    S -.item.error.-> F
+    Q -.->|item.error| F[Failed]
+    G -.->|item.error| F
+    S -.->|item.error| F
 ```
 
 The Dashboard's `useAgentBoard(name, platform)` hook composes this: it takes the REST snapshot from the reducer above, then live-folds in newer `event: log` SSE frames via a client-side mirror of the same reducer (`applyLogEvent`) — so the board updates between snapshot refetches without a full re-fetch. See [Dashboard](architecture.md) for the wiring.
