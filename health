@@ -81,14 +81,32 @@ if have ffmpeg && have ffprobe; then record ffmpeg pass "$(ffmpeg -version 2>/de
 else record ffmpeg skip "absent — rendering and ~13 stitch tests will skip"; fi
 
 # ---------------------------------------------------------------- 2. python suites
+# A green suite that quietly ran fewer tests than it could is the failure mode worth
+# naming: `@needs_ffmpeg` skips itself when ffmpeg is absent, so a broken ffmpeg install
+# turns ~13 real stitch tests into silence and the run still says HEALTHY. Skipping stays
+# non-fatal — the requirement genuinely is optional — but it is counted and reported, so
+# "we tested less than last time" is something you can see rather than something you infer.
 step "Python test suites"
+TESTS_SKIPPED=0
+SKIPPED_SUITES=()
 for p in ReelScraper AnalysisEngine AutoSearch SimilarContent; do
   if [ -d "$ROOT/$p/tests" ]; then
     run "$p tests" "$ROOT/$p" uv run pytest tests/ -q -p no:warnings
+    _slog="$LOG_DIR/$(echo "$p tests" | tr -c '[:alnum:]' '_').log"
+    # pytest's own tail line, e.g. "73 passed, 26 skipped in 4.21s"
+    _n="$(grep -oE '[0-9]+ skipped' "$_slog" 2>/dev/null | tail -1 | grep -oE '^[0-9]+' || true)"
+    if [ -n "${_n:-}" ] && [ "$_n" -gt 0 ]; then
+      TESTS_SKIPPED=$((TESTS_SKIPPED + _n))
+      SKIPPED_SUITES+=("$p:$_n")
+    fi
   else
     record "$p tests" skip "no tests/ directory"
   fi
 done
+if [ "$TESTS_SKIPPED" -gt 0 ]; then
+  printf '    %s-%s %-34s %s\n' "$_D" "$_R" "tests skipped (not failures)" \
+    "$TESTS_SKIPPED — ${SKIPPED_SUITES[*]}"
+fi
 
 # ---------------------------------------------------------------- 3. dashboard
 step "Dashboard"
@@ -303,12 +321,19 @@ fi
 
 # ---------------------------------------------------------------- summary
 printf '\n  %s%s%s\n' "$_B" "────────────────────────────────────────────────" "$_R"
+# `%d passed, %d skipped` counts CHECKS. Tests skipped *inside* a passing suite are a
+# different quantity and were invisible here — a green line above a suite that ran 26 fewer
+# tests than it could. Name it separately so the two are never read as the same number.
+_tskip=""
+[ "${TESTS_SKIPPED:-0}" -gt 0 ] && _tskip="$(printf ' · %d test(s) skipped: %s' \
+  "$TESTS_SKIPPED" "${SKIPPED_SUITES[*]}")"
+
 if [ "$FAIL" -eq 0 ]; then
-  printf '  %sHEALTHY%s — %d passed, %d skipped\n\n' "$_G" "$_R" "$PASS" "$SKIP"
+  printf '  %sHEALTHY%s — %d passed, %d skipped%s\n\n' "$_G" "$_R" "$PASS" "$SKIP" "$_tskip"
   exit 0
 fi
 
-printf '  %s%d FAILED%s — %d passed, %d skipped\n\n' "$_E" "$FAIL" "$_R" "$PASS" "$SKIP"
+printf '  %s%d FAILED%s — %d passed, %d skipped%s\n\n' "$_E" "$FAIL" "$_R" "$PASS" "$SKIP" "$_tskip"
 for n in "${FAILED_NAMES[@]}"; do
   log="$LOG_DIR/$(echo "$n" | tr -c '[:alnum:]' '_').log"
   printf '  %s%s%s\n' "$_E" "$n" "$_R"
