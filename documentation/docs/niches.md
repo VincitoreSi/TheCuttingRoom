@@ -126,3 +126,46 @@ uv run cli.py analyze instagram
 uv run cli.py media   instagram
 uv run cli.py start        # prints HUB_URL=http://127.0.0.1:<port> (8787 if free)
 ```
+
+## Running two niches at once
+
+One clone per niche. `new-niche.sh` branches a whole pipeline, so the clean way to work on
+Fashion and Fitness at the same time is two checkouts, each on its own branch:
+
+```bash
+git clone git@github.com:VincitoreSi/TheCuttingRoom.git fashion
+git clone git@github.com:VincitoreSi/TheCuttingRoom.git fitness
+cd fitness && ./scripts/new-niche.sh fitness && ./init
+```
+
+They cannot touch each other. Nothing in this project writes outside its own directory —
+no shared cache, no file in `$HOME` — so the only thing two clones share is the loopback
+network. Two things follow from that, and `./init` handles both:
+
+**Each checkout owns a port.** The first clone takes 8787, the second 8788, and the choice
+is pinned in that clone's `ReelScraper/.env` as `HUB_PORT`. It is a *pin*, not a race: the
+port stays the same across restarts, so it can be bookmarked and pointed at. Set `HUB_PORT`
+by hand (or `./init --port 8790`) to choose your own.
+
+**Each checkout's agents dial their own hub.** `./init` writes `BACKEND_API` into every
+component's `.env`. This is the one that matters: `cd SimilarContent && uv run cli.py
+propose` resolves the hub from that file, and a `.env` copied between clones — or a stale
+`export BACKEND_API=` in your shell — would post this niche's proposals into the other
+niche's studio, against the other niche's corpus, with every call returning 200.
+
+So the agents check. Each one asks `GET /api/hub` at startup and refuses to run if the hub
+belongs to a different checkout:
+
+```
+ERROR: http://127.0.0.1:8788 is a different checkout's hub.
+  it serves:   /Users/you/fitness/ReelScraper
+  this agent:  /Users/you/fashion/AnalysisEngine
+```
+
+!!! tip "Telling the two boards apart"
+    Two Dashboards look identical. The sidebar footer carries the niche name from
+    `niche_config.json` above the host and port, which is the quickest way to know which
+    one you are looking at.
+
+`./stop` and `./clean` are scoped the same way — they match processes by working directory,
+never by command line, so stopping one clone never touches the other's hub.

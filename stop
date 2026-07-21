@@ -35,11 +35,13 @@ if [ -z "$pids" ]; then
   ok "nothing running"
   # A hub from another clone on the usual port is not ours to stop, but staying silent
   # about it is how someone ends up testing the wrong tree for an hour.
-  other="$(hub_cwd 8787 2>/dev/null || true)"
+  # This checkout's own port if it has pinned one, else the shared default.
+  port="$(read_key HUB_PORT "$ROOT/ReelScraper/.env")"; port="${port:-8787}"
+  other="$(hub_cwd "$port" 2>/dev/null || true)"
   if [ -n "$other" ]; then
     case "$other" in
       "$ROOT"/*) ;;
-      *) warn ":8787 is held by a different checkout — ${other%/ReelScraper}"
+      *) warn ":$port is held by a different checkout — ${other%/ReelScraper}"
          say "${_D}not stopping it; run ./stop there if you meant that one${_R}" ;;
     esac
   fi

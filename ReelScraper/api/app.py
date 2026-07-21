@@ -466,18 +466,61 @@ def _has_raw_scrape(platform) -> bool:
     return any(pdir(platform).glob("*_raw*.json"))
 
 
+_PAGES_URL_RE = re.compile(r"^\s*https?://[^/]+/", re.I)
+# Path segments that introduce an id rather than being one (youtube.com/channel/UC…).
+_PAGES_PATH_PREFIXES = {"channel", "c", "user"}
+
+
+def _norm_page_handle(line: str) -> str:
+    """A pages.txt line reduced to the identity the scraper will actually fetch.
+
+    pages.txt accepts three spellings of the same creator — `handle`, `@handle`, and the
+    full profile URL — and every scraper collapses them before fetching (see
+    `platforms/instagram/scrape.py::norm_handle`). The hub did not: it compared raw
+    strings. AutoSearch posts approved candidates in the URL form and a human types the
+    bare handle, so approving a creator already on the watchlist appended them a SECOND
+    time. The scrape then deduped and pulled that creator once, while the Board counted
+    two pages — a count quietly disagreeing with the run it was describing.
+
+    Deliberately not lowercased. Instagram handles are case-insensitive, but YouTube
+    channel ids are not, and folding case here would merge two genuinely different
+    channels into one.
+    """
+    s = _PAGES_URL_RE.sub("", line or "").strip()
+    s = s.split("?", 1)[0].split("#", 1)[0]
+    parts = [p for p in s.split("/") if p]
+    if not parts:
+        return ""
+    head = parts[0].lstrip("@")
+    if head in _PAGES_PATH_PREFIXES and len(parts) > 1:
+        head = parts[1].lstrip("@")
+    return head
+
+
 def _watchlist(platform):
-    """Handles on the watchlist — the non-comment lines of pages.txt.
+    """Creators on the watchlist — the non-comment lines of pages.txt, one per creator.
 
     This is the count the Board's Sources node wants. It used to show `creators`, which
     counts distinct creators in the SCORED corpus, so a freshly added handle read as
     "0 pages" until two more stages had run.
+
+    Deduped the way the scraper dedupes, so the number describes what a scrape will fetch
+    rather than how many lines are in the file.
     """
     pf = pdir(platform) / "pages.txt"
     if not pf.exists():
         return []
-    return [l.strip() for l in pf.read_text(encoding="utf-8").splitlines()
-            if l.strip() and not l.lstrip().startswith("#")]
+    out, seen = [], set()
+    for line in pf.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key = _norm_page_handle(line)
+        if key and key in seen:
+            continue
+        seen.add(key)
+        out.append(line)
+    return out
 
 
 # Counting reels means parsing the raw scrape dump, which runs to tens of MB — far too
@@ -516,34 +559,72 @@ def _scraped_count(platform) -> int:
 
 GEMINI_ENV_VARS = ("GEMINI_API_KEY", "GEMINI_KEY", "GOOGLE_API_KEY")
 
+# Where each agent keeps its own gitignored .env. Sibling dirs spelled out rather than
+# reusing ANALYSIS_ENGINE_DIR / AUTO_SEARCH_DIR: those constants are defined ~1200 lines
+# below with the stage commands, and depending on the deferred binding would be a trap for
+# the next person who moves either one. A renderable producer may also declare `dir` in its
+# manifest, which wins — that is how a producer outside this list is found.
+AGENT_DIRS = {
+    "analysis-engine": "AnalysisEngine",
+    "auto-search": "AutoSearch",
+    "similar-content": "SimilarContent",
+}
+
+
+def _env_file_declares(path, names) -> bool:
+    """Does this .env assign any of `names` a non-empty value? PRESENCE ONLY.
+
+    The value is compared against the empty string and discarded. It is never returned,
+    never logged, never bound to a name that outlives the loop — the hub does not store
+    secrets, and this function is the only place it reads a file that holds one.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#") or "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        if name.strip() in names and value.strip().strip("'\""):
+            return True
+    return False
+
+
+def _agent_env_dir(agent: str, manifest: dict | None = None):
+    """The directory holding `agent`'s .env, or None when it cannot be resolved."""
+    declared = (manifest or {}).get("dir")
+    if declared:
+        # Same containment rule the render launcher applies: a direct sibling, no traversal.
+        candidate = (ROOT.parent / declared).resolve()
+        if candidate.parent == ROOT.parent.resolve() and candidate.is_dir():
+            return candidate
+    known = AGENT_DIRS.get(agent)
+    return (ROOT.parent / known) if known else None
+
+
+def _secret_present(env_var: str, agent_dir) -> bool | None:
+    """Is `env_var` set for an agent living in `agent_dir`? None = cannot tell.
+
+    The hub checks its own environment first, then that agent's gitignored .env, because
+    that is where ./init writes the key and the hub does not inherit it.
+    """
+    if not env_var:
+        return None
+    if os.environ.get(env_var):
+        return True
+    if agent_dir is None:
+        return None
+    return _env_file_declares(agent_dir / ".env", {env_var})
+
 
 def _gemini_key_present() -> bool:
-    """Is a Gemini key reachable by the agents that need one? PRESENCE ONLY.
-
-    The value is never read into a variable, never returned, never logged — same contract
-    as /api/config/agent/{agent}/secrets/status. The hub checks its own environment first,
-    then looks for a non-empty assignment in the sibling agents' gitignored .env files,
-    because that is where ./init puts the key and the hub does not inherit it.
-    """
+    """Is a Gemini key reachable by the agents that need one? PRESENCE ONLY."""
     if any(os.environ.get(v) for v in GEMINI_ENV_VARS):
         return True
-    # Sibling agent dirs spelled out rather than reusing ANALYSIS_ENGINE_DIR: that
-    # constant is defined ~1100 lines below with the stage commands, and depending on
-    # the deferred binding would be a trap for the next person who moves either one.
-    for d in (ROOT.parent / "AnalysisEngine", ROOT.parent / "SimilarContent"):
-        f = d / ".env"
-        try:
-            text = f.read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for line in text.splitlines():
-            line = line.strip()
-            if line.startswith("#") or "=" not in line:
-                continue
-            name, _, value = line.partition("=")
-            if name.strip() in GEMINI_ENV_VARS and value.strip().strip("'\""):
-                return True
-    return False
+    return any(_env_file_declares(ROOT.parent / d / ".env", set(GEMINI_ENV_VARS))
+               for d in ("AnalysisEngine", "SimilarContent"))
 
 
 def _media_count(platform) -> int:
@@ -602,6 +683,79 @@ def stage_readiness(platform):
     # Discovery is opt-in and never part of the core run; it has no corpus precondition.
     out["auto-search"] = st(True)
     return out
+
+
+def _source_mtime() -> float:
+    """Newest mtime across the hub's own Python sources.
+
+    Python loads a module once and keeps it; a hub launched before a `git pull` goes on
+    serving the code it imported at startup, from memory, with no outward sign. Comparing
+    this against the value captured at import answers the one question that matters:
+    is the running process still the code that is on disk?
+
+    Only the files whose contents shape the HTTP surface are stamped. Platform scrapers are
+    re-read on every stage run (they are subprocesses), so a change there is picked up
+    without a restart and must not be reported as skew.
+    """
+    newest = 0.0
+    for f in [ROOT / "cli.py", *(ROOT / "api").glob("*.py"), *(ROOT / "core").glob("*.py")]:
+        try:
+            newest = max(newest, f.stat().st_mtime)
+        except OSError:
+            continue
+    return newest
+
+
+# Captured at import — i.e. the state of the tree this process actually loaded.
+SOURCE_MTIME_AT_START = _source_mtime()
+
+
+def _checkout_niche() -> Optional[str]:
+    """The niche this checkout works on, from the platforms' niche_config.json.
+
+    Normally identical across platforms (a niche clone is branched wholesale), so the
+    common case returns one name. Distinct values are joined rather than picking a winner:
+    a clone that is half Fashion and half Fitness is worth seeing, not smoothing over.
+    """
+    names = []
+    for p in PLATFORMS:
+        try:
+            cfg = json.loads((pdir(p) / "niche_config.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        n = (cfg.get("niche") or "").strip()
+        if n and n not in names:
+            names.append(n)
+    return " · ".join(names) or None
+
+
+@app.get("/api/hub")
+def hub_identity():
+    """Which checkout this hub is, and whether it is still running the code on disk.
+
+    Exists because of a real half-hour of confusion: a hub started at 14:43 was still
+    holding :8787 when the tree was re-cloned at 17:33. `./init` saw something answering
+    and reused it, so a freshly built Dashboard talked to a three-hour-old API. The new
+    fields it asked for (`watchlist`, `scraped_items`) simply were not in the response, and
+    the Board rendered "undefined pages" — a symptom that points nowhere near the cause.
+
+    `stale` is the whole point of the endpoint, but it is not the only signal: a hub old
+    enough to predate this route answers 404, which tells a caller the same thing. Callers
+    must treat "no /api/hub" as stale rather than as an error.
+    """
+    now = _source_mtime()
+    return {
+        "root": str(ROOT),
+        # What this checkout is FOR. One clone per niche is the supported way to run two
+        # niches at once (scripts/new-niche.sh), and two Dashboards are otherwise identical
+        # on screen — so the hub says which one it is and the UI can put it in the chrome.
+        "niche": _checkout_niche(),
+        # Second of tolerance: a checkout can land its files inside the same second the
+        # hub imports them, and a restart loop is worse than a missed skew of one second.
+        "stale": now > SOURCE_MTIME_AT_START + 1,
+        "source_mtime": SOURCE_MTIME_AT_START,
+        "source_mtime_now": now,
+    }
 
 
 @app.get("/api/platforms")
@@ -1399,7 +1553,11 @@ def _append_handle_to_pages(platform, handle) -> bool:
     False (no-op) if the handle is already present."""
     if not handle:
         return False
-    if handle in set(_pages_lines(platform)):
+    # Compared on the normalized handle, not the raw string: the agent posts the full URL
+    # form and a human types the bare handle, so a raw comparison added the same creator
+    # twice. See _norm_page_handle.
+    existing = {_norm_page_handle(l) for l in _pages_lines(platform)}
+    if handle in set(_pages_lines(platform)) or _norm_page_handle(handle) in existing:
         return False
     pf = pdir(platform) / "pages.txt"
     pf.parent.mkdir(parents=True, exist_ok=True)
@@ -1641,15 +1799,34 @@ def put_agent_config(agent, body: AgentConfigIn):
 
 @app.get("/api/config/agent/{agent}/secrets/status")
 def agent_secrets_status(agent):
-    """Secret STATUS only — never values (§10.4). Presence is what the agent self-reported
-    on registration; the hub never stores a secret. Returns [{name, env_var, present, required}]."""
+    """Secret STATUS only — never values (§10.4). Returns [{name, env_var, present, required}].
+
+    Presence is evaluated NOW, against the hub's environment and the agent's own .env — it
+    used to be replayed from what the agent self-reported when it last registered, and that
+    is a snapshot, not a status. Paste a key into ./init and the Agent Desk went on showing
+    "SECRET MISSING" until the agent happened to run again and re-register; the Board's
+    readiness check, which reads the .env directly, said the opposite at the same moment.
+    Two code paths answering one question with opposite answers.
+
+    The two answers are OR-ed, and deliberately not the other way round: the AGENT can see
+    sources the hub cannot. AutoSearch accepts `IG_SESSIONID` or a gitignored session.txt;
+    AnalysisEngine accepts GEMINI_API_KEY, GEMINI_KEY *or* GOOGLE_API_KEY while its manifest
+    names only the first. Letting a live `False` overrule a self-reported `True` would
+    report a working agent as broken — a worse error than the one being fixed, and a
+    silent one. So the live check can only ever ADD presence.
+
+    The cost is that a key deleted by hand still reads as present until the agent next
+    registers. That was already true before this endpoint looked at anything live.
+    """
     reg = _read_json(PRODUCERS_FILE, {})
     if agent not in reg:
         raise HTTPException(404, f"no producer {agent}")
+    agent_dir = _agent_env_dir(agent, reg[agent])
     out = []
     for s in (reg[agent].get("secrets") or []):
+        present = bool(s.get("present")) or bool(_secret_present(s.get("env_var"), agent_dir))
         out.append({"name": s.get("name"), "env_var": s.get("env_var"),
-                    "present": s.get("present"), "required": s.get("required", True)})
+                    "present": present, "required": s.get("required", True)})
     return out
 
 

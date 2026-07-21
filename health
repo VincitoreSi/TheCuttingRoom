@@ -243,29 +243,27 @@ fi
 # ---------------------------------------------------------------- 6. live smoke
 if [ "$LIVE" -eq 1 ]; then
   step "Live smoke test"
-  URL="http://127.0.0.1:8787"
+  # This checkout's pinned port when it has one, else the shared default. Read rather than
+  # claimed: a test gate must not acquire a port pin as a side effect of running.
+  HUB_PORT_PIN="$(read_key HUB_PORT "$ROOT/ReelScraper/.env")"; HUB_PORT_PIN="${HUB_PORT_PIN:-8787}"
+  URL="http://127.0.0.1:$HUB_PORT_PIN"
   STARTED=0
-  # Reuse a running hub only after confirming it belongs to THIS checkout. A second clone or
-  # a worktree with its own hub on 8787 would otherwise be tested in place of this one, and
-  # its results attributed here — that happened, and reported two failures for a tree whose
-  # Dashboard had simply never been built. hub_cwd returns the listening process's working
-  # directory, which start_hub always sets to <repo>/ReelScraper.
+  # Reuse a running hub only if it belongs to THIS checkout *and* is running the code on
+  # disk. Either mistake attributes another tree's results here — that happened, and
+  # reported two failures for a checkout whose Dashboard had simply never been built — or
+  # tests the API of a process that predates the change being gated. See hub_state.
   REUSE=0; REUSE_WHY=""
   if hub_responding "$URL"; then
-    owner_cwd="$(hub_cwd 8787 || true)"
-    if [ -z "$owner_cwd" ]; then
-      # Could not inspect the process — assume it is ours rather than starting a duplicate.
-      REUSE=1; REUSE_WHY="reusing the one already running (checkout unverified)"
-    elif [ "$owner_cwd" = "$ROOT/ReelScraper" ]; then
-      REUSE=1; REUSE_WHY="reusing the one already running"
-    else
-      say "${_D}(:8787 belongs to a different checkout — ${owner_cwd%/ReelScraper}; starting our own)${_R}"
-    fi
+    case "$(hub_state "$HUB_PORT_PIN")" in
+      ours)    REUSE=1; REUSE_WHY="reusing the one already running" ;;
+      stale)   say "${_D}(:$HUB_PORT_PIN predates the code on disk; starting our own)${_R}" ;;
+      foreign) say "${_D}(:$HUB_PORT_PIN belongs to a different checkout; starting our own)${_R}" ;;
+    esac
   fi
   if [ "$REUSE" -eq 1 ]; then
     record "hub reachable" pass "$REUSE_WHY"
   else
-    PORT="$(free_port 8787)"
+    PORT="$(free_port "$HUB_PORT_PIN")"
     if start_hub "$PORT" 2>/dev/null; then
       URL="$HUB_URL"; STARTED=1
       record "hub reachable" pass "started on $URL"

@@ -277,6 +277,22 @@ BACKEND_API=http://127.0.0.1:9123 npm run dev            # Dashboard dev server
 Production needs none of this: the hub serves the built Dashboard
 same-origin, so it is port-agnostic by construction.
 
+### One port per checkout
+
+A fallback port is fine for a one-off, and useless as an address — it changes on
+every restart, so nothing can be bookmarked and no `.env` can point at it. `./init`
+therefore **pins** the port a checkout owns into `ReelScraper/.env` as `HUB_PORT`
+(8787 for the first clone on the machine, 8788 for the next) and writes that address
+into every component's `BACKEND_API`.
+
+That second half is the one that matters. `cli.py start` exports `BACKEND_API` only
+for the stages *it* spawns; an agent you run by hand reads its own `.env`. On a
+second clone, a `.env` still pointing at 8787 aims that agent at the **first** clone's
+hub — where it reads the wrong corpus and writes to the wrong studio, with every call
+returning 200. Each agent checks `GET /api/hub` at startup and refuses to run against
+a hub belonging to another checkout. See
+[Niches → Running two niches at once](niches.md#running-two-niches-at-once).
+
 ---
 
 ## Planned: unified CLI-parity commands

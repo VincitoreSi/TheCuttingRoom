@@ -6,6 +6,7 @@ import { useLogStream, useNow, usePageVisible, useReducedMotion } from "../lib/h
 import { activitySummary, liveStageIndex } from "../lib/activityModel";
 import type { ActivitySummary } from "../lib/activityModel";
 import { elapsed } from "../lib/format";
+import { plural } from "../lib/boardCounts";
 import { sectionMotion } from "../lib/motion";
 import { Button } from "./ui";
 import { Seam } from "./Seam";
@@ -104,10 +105,6 @@ export function PipelineBoard({
 
   const analyzedCount = analysisQ.data?.filter((b) => !b.is_reference).length ?? 0;
 
-  // pluralize count-nouns the way Band A already does (1 run / 2 runs) — only
-  // real nouns get an "s"; the adjective/status words (pending, viral, saved)
-  // must not, so those stay hand-written.
-  const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
   // Every node reports ITS OWN stage. Sources used to show `creators` and Scrape `items`,
   // both of which are derived from the scored corpus — so a handle added a moment ago read
   // "0 pages", and 250 freshly scraped reels read "0 reels", until analyze (two stages

@@ -48,8 +48,8 @@ both ways forward: drop in the zip, or run `./init` and add your own handles.
 ```bash
 ./init                 # check, install, configure, launch
 ./init --no-launch     # set everything up but don't start the hub
-./init --reset         # wipe existing generated data first (asks before deleting)
-./init --port 9000     # prefer a specific port
+./init --reset         # clear stored API keys first (your data is kept — see ./clean)
+./init --port 9000     # pin this checkout to a specific port
 ```
 
 The first-run path from a clean clone. It verifies `uv`, Python, Node, npm and
@@ -66,10 +66,19 @@ You land on an **empty** dashboard. That is the point: no corpus, no proposals,
 no renders, ready for your own handles in
 `ReelScraper/platforms/instagram/pages.txt`.
 
-!!! danger "`--reset` deletes scraped media, and that is not recoverable"
-    Re-obtaining it means re-scraping. `./demo` restores only the curated
-    subset in `demo-data/`, not everything a real install accumulates.
-    Interactively, `--reset` asks before deleting.
+It also **pins the port this checkout owns** — 8787 for the first clone on the
+machine, 8788 for the next — into `ReelScraper/.env` as `HUB_PORT`, and writes
+that address into every component's `BACKEND_API`. A hub already answering is
+only reused if it belongs to this checkout *and* is running the code on disk; a
+stale one is restarted and another checkout's is left alone. See
+[Niches → Running two niches at once](niches.md#running-two-niches-at-once).
+
+!!! note "`--reset` clears keys, not data"
+    It removes the stored API keys (`AnalysisEngine/.env`, `SimilarContent/.env`,
+    `AutoSearch/.env`, `ReelScraper/.env`, `platforms/x/session.txt`) and leaves
+    every scraped reel where it is — re-running setup after rotating a key should
+    not cost you a scrape. To wipe the data too, use [`./clean`](#clean-back-to-a-fresh-clone),
+    which archives it to a zip first. Keys are not recoverable either way.
 
 ## `./docsite` — this site
 
@@ -96,6 +105,11 @@ to a free one** when it is busy, printing the port they actually got. Nothing
 in the system hardcodes 8787 — the hub exports `BACKEND_API` so every agent it
 spawns inherits the real address. See
 [CLI Reference → Ports](cli.md#ports-nothing-is-hardcoded).
+
+The hub's port is additionally **pinned per checkout** in `ReelScraper/.env`
+(`HUB_PORT`), so a second clone settles on 8788 and *stays* there instead of
+taking a different random port on every restart. A pinned port that another
+checkout has taken is re-claimed rather than handed over.
 
 ---
 

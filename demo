@@ -23,7 +23,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$ROOT/scripts/_common.sh"
 
 DEMO_DATA="$ROOT/demo-data/data"
-KEEP=0; PREFERRED_PORT=8787
+KEEP=0; PREFERRED_PORT=""   # empty = ask claim_port for this checkout's pin
 while [ $# -gt 0 ]; do
   case "$1" in
     --keep)    KEEP=1 ;;
@@ -117,16 +117,34 @@ fi
 
 # ---------------------------------------------------------------- 4. launch
 step "Starting the hub"
+[ -n "$PREFERRED_PORT" ] || PREFERRED_PORT="$(claim_port)"   # this checkout's own port
 URL="http://127.0.0.1:$PREFERRED_PORT"
+REUSED=0
 if hub_responding "$URL"; then
-  ok "a hub is already serving on $URL — reusing it"
-  warn "it started before the dataset was copied; restart it if views look stale"
-else
+  # Only ever adopt our own, current hub — see hub_state. Reusing another clone's would
+  # show that clone's niche behind this one's banner.
+  case "$(hub_state "$PREFERRED_PORT")" in
+    ours)
+      REUSED=1
+      ok "a hub is already serving on $URL — reusing it"
+      warn "it started before the dataset was copied; restart it if views look stale"
+      ;;
+    stale)
+      warn "the hub on $URL predates the code on disk — restarting it"
+      "$ROOT/stop" >/dev/null 2>&1 || true
+      ;;
+    foreign)
+      warn "the hub on $URL belongs to a different checkout — leaving it running"
+      ;;
+  esac
+fi
+if [ "$REUSED" -eq 0 ]; then
   PORT="$(free_port "$PREFERRED_PORT")"
   [ "$PORT" = "$PREFERRED_PORT" ] || warn "port $PREFERRED_PORT is busy — using $PORT"
   start_hub "$PORT"; URL="$HUB_URL"
   ok "hub up"
 fi
+sync_backend_api "$URL"
 
 open_browser "$URL"
 banner "$URL" "Ready — a studio with work in it."

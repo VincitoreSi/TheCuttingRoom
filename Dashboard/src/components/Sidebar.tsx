@@ -13,6 +13,7 @@ import {
   IconStudio,
 } from "./icons";
 import { cx } from "../lib/cx";
+import { useHub } from "../lib/hooks";
 
 export type ViewKey =
   | "dashboard"
@@ -48,6 +49,7 @@ const NAV: {
 ];
 
 export function Sidebar({ view, onNavigate }: { view: ViewKey; onNavigate: (v: ViewKey) => void }) {
+  const hub = useHub();
   return (
     <aside className="app-sidebar" aria-label="Primary">
       <div className="app-brand">
@@ -89,6 +91,13 @@ export function Sidebar({ view, onNavigate }: { view: ViewKey; onNavigate: (v: V
 
       <div className="app-sidebar__foot">
         <div className="eyebrow">Local · $0 · offline</div>
+        {/* Which checkout you are looking at. One clone per niche is how two niches run at
+            the same time, and the two boards are otherwise pixel-identical — so the niche
+            name is the only thing in the chrome that tells them apart. Absent on a hub too
+            old to serve /api/hub, which is why the host line below stands on its own. */}
+        {hub.data?.niche && (
+          <div className="text-[11px] text-[var(--ink-muted)] mt-1">{hub.data.niche}</div>
+        )}
         {/* Read from the address bar, not hardcoded: the hub falls back to a random free
             port when 8787 is taken, and a footer insisting on 8787 is then simply wrong. */}
         <div className="font-mono text-[10px] text-[var(--ink-faint)] mt-1">

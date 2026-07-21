@@ -14,6 +14,13 @@ import type { AgentBoard, ConfigResponse, Jobs, LogEvent, ScheduleRow, Stage } f
 export const usePlatforms = () =>
   useQuery({ queryKey: ["platforms"], queryFn: api.platforms, refetchInterval: 15_000 });
 
+/* Identity of the hub behind this page. Two clones — one niche each — put two
+   near-identical Dashboards on screen, so the niche name is what tells them apart.
+   `retry: false` because an older hub has no /api/hub at all and retrying a 404 just
+   delays the fallback; the chrome degrades to showing the host alone. */
+export const useHub = () =>
+  useQuery({ queryKey: ["hub"], queryFn: api.hub, retry: false, staleTime: 60_000 });
+
 export const useContent = (p: string) =>
   useQuery({ queryKey: ["content", p], queryFn: () => api.content(p), enabled: !!p });
 

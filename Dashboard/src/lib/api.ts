@@ -6,6 +6,7 @@ import type {
   ConfigResponse,
   EvalRecord,
   FactorsResponse,
+  HubIdentity,
   Insight,
   LogEvent,
   PlatformSummary,
@@ -68,6 +69,9 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   platforms: () => fetchJson<PlatformSummary[]>("/api/platforms"),
+
+  /** Which checkout this hub is, and whether it still runs the code on disk. */
+  hub: () => fetchJson<HubIdentity>("/api/hub"),
 
   content: (p: string) => fetchJson<Reel[]>(`/api/content/${p}`),
 

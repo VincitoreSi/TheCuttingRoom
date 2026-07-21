@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/_common.sh
 . "$ROOT/scripts/_common.sh"
 
-LAUNCH=1; RESET=0; PREFERRED_PORT=8787
+LAUNCH=1; RESET=0; PREFERRED_PORT=""   # empty = ask claim_port for this checkout's pin
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-launch) LAUNCH=0 ;;
@@ -180,15 +180,48 @@ if [ "$LAUNCH" -eq 0 ]; then
 fi
 
 step "Starting the hub"
-URL="http://127.0.0.1:$PREFERRED_PORT"
-if hub_responding "$URL"; then
-  ok "a hub is already serving on $URL — reusing it"
+# The port this checkout owns. Pinned on the first run and stable from then on, so a second
+# clone gets 8788 rather than a different random port every restart — an address nothing
+# could bookmark and no .env could point at. See claim_port.
+if [ -n "$PREFERRED_PORT" ]; then
+  set_key HUB_PORT "$PREFERRED_PORT" "$ROOT/ReelScraper/.env"   # --port is a pin, not a one-off
 else
+  PREFERRED_PORT="$(claim_port)"
+fi
+[ "$PREFERRED_PORT" = "8787" ] || \
+  say "${_D}this checkout is pinned to port $PREFERRED_PORT — 8787 belongs to another clone${_R}"
+URL="http://127.0.0.1:$PREFERRED_PORT"
+REUSED=0
+if hub_responding "$URL"; then
+  # Reuse is only safe if it is OUR hub running OUR current code. See hub_state.
+  case "$(hub_state "$PREFERRED_PORT")" in
+    ours)
+      REUSED=1
+      ok "a hub is already serving on $URL — reusing it"
+      ;;
+    stale)
+      warn "the hub on $URL started before the code now on disk — restarting it"
+      say "${_D}it would keep serving the old API from memory, and the Dashboard would${_R}"
+      say "${_D}ask it for fields it has never heard of${_R}"
+      "$ROOT/stop" >/dev/null 2>&1 || true
+      ;;
+    foreign)
+      warn "the hub on $URL belongs to a different checkout — leaving it running"
+      say "${_D}adopting it would point this Dashboard at another project's data${_R}"
+      ;;
+  esac
+fi
+if [ "$REUSED" -eq 0 ]; then
   PORT="$(free_port "$PREFERRED_PORT")"
   [ "$PORT" = "$PREFERRED_PORT" ] || warn "port $PREFERRED_PORT is busy — using $PORT"
   start_hub "$PORT"; URL="$HUB_URL"
   ok "hub up"
 fi
+
+# Every agent in this checkout now dials THIS hub, not whatever holds 8787. Done after the
+# port is final rather than before, because the fallback above can still move it.
+sync_backend_api "$URL"
+ok "agents in this checkout point at $URL"
 
 open_browser "$URL"
 banner "$URL" "Ready — an empty studio."

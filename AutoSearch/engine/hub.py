@@ -28,6 +28,7 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 log = logging.getLogger("as.hub")
@@ -86,6 +87,39 @@ class HubClient:
             return True
         except HubError:
             return False
+
+    def foreign_checkout(self) -> str | None:
+        """The hub's own directory, when it belongs to a DIFFERENT checkout than this agent.
+
+        None means "no mismatch to report" — either the hub is ours, or it cannot say (a hub
+        older than /api/hub, or one that is simply unreachable). Absence of evidence is not
+        evidence of a mismatch, so only a definite mismatch is ever returned.
+
+        Two clones of this project on one machine — one niche each — share nothing but the
+        loopback. BACKEND_API is the *only* thing aiming this agent at a hub, and a .env
+        copied between clones, or a BACKEND_API exported in the shell, aims it at the other
+        one: the proposal is written to that niche's studio, against that niche's corpus,
+        and every call returns 200. Nothing else in the system can notice. This can.
+
+        Comparing paths is not a breach of the hub-only rule — nothing is read from the
+        sibling, and the hub reports its own location over HTTP. Only the expected value is
+        local.
+        """
+        try:
+            info = self._request("GET", "/api/hub", timeout=10) or {}
+        except HubError:
+            return None
+        root = str(info.get("root") or "")
+        if not root:
+            return None
+        # <repo>/<Agent>/engine/hub.py -> <repo>/ReelScraper
+        mine = Path(__file__).resolve().parents[2] / "ReelScraper"
+        try:
+            if Path(root).resolve() == mine.resolve():
+                return None
+        except OSError:
+            return None
+        return root
 
     # ---- platform config (niche + discovery keywords + pages.txt) ---------------------
     def platform_config(self, platform: str) -> dict:

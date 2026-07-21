@@ -28,6 +28,23 @@ export interface StageReadiness {
   reason: string;
 }
 
+/* GET /api/hub — who this hub is.
+
+   Running two niches at once means two clones, each with its own hub on its own port. The
+   two Dashboards are otherwise identical on screen, so `niche` is what distinguishes them.
+   Every field is optional-by-absence in practice: a hub older than this route 404s, and the
+   UI must fall back rather than assert. */
+export interface HubIdentity {
+  /** absolute path of the ReelScraper directory this hub is serving */
+  root: string;
+  /** the niche this checkout works on, from niche_config.json — null if unreadable */
+  niche: string | null;
+  /** the process started before the code now on disk; it is serving the old API from memory */
+  stale: boolean;
+  source_mtime: number;
+  source_mtime_now: number;
+}
+
 export interface PlatformSummary {
   platform: string;
   /** a SCORED corpus exists — i.e. analyze has run. Not "a scrape has run"; see `scraped`. */

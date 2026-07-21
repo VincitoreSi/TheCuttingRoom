@@ -127,6 +127,34 @@ def _manifest() -> dict:
     }
 
 
+def _refuse_foreign_hub(hub, base: str) -> None:
+    """Stop if BACKEND_API is aimed at a DIFFERENT checkout's hub.
+
+    Running two niches side by side means two clones, each with its own hub on its own
+    port. The only thing joining this agent to one of them is BACKEND_API — and a .env
+    copied between clones, or a stale `export BACKEND_API=` in the shell, points it at the
+    other one. Every call then succeeds: work is read from that niche's corpus and written
+    to that niche's studio, under this agent's name, with nothing to show anything went
+    wrong. Refusing costs one request and is the only place this is detectable.
+
+    Silent when the hub cannot say (too old to serve /api/hub, or unreachable) — a missing
+    answer is not a mismatch.
+    """
+    other = hub.foreign_checkout()
+    if not other:
+        return
+    print(
+        f"\nERROR: {base} is a different checkout's hub.\n"
+        f"  it serves:   {other}\n"
+        f"  this agent:  {Path(__file__).resolve().parent}\n\n"
+        "Using it would write this niche's work into that one's corpus.\n"
+        "Point BACKEND_API at this checkout's hub (./init writes it into .env),\n"
+        "or start this checkout's own:  cd ../ReelScraper && uv run cli.py start\n",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+
 class Bootstrap:
     """Shared startup: verify hub, self-register, fetch config."""
 
@@ -144,6 +172,7 @@ class Bootstrap:
                       "Start it in ReelScraper:  uv run cli.py start\n", file=sys.stderr)
                 raise SystemExit(2)
             return self
+        _refuse_foreign_hub(self.hub, self.base)
         try:
             self.hub.register_producer(_manifest())
         except HubError as e:

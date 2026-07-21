@@ -75,3 +75,64 @@ def test_the_watchlist_count_reflects_the_edit_immediately(hub):
     p = next(x for x in hub.get("/api/platforms").json() if x["platform"] == "instagram")
     assert p["watchlist"] == 2
     assert p["readiness"]["scrape"]["ready"] is True
+
+
+# ---------------------------------------------------------------------------------------
+# pages.txt accepts three spellings of one creator — `handle`, `@handle`, and the profile
+# URL — and the scrapers have always collapsed them before fetching. The hub did not: it
+# compared raw strings, so approving a discovery candidate for a creator a human had
+# already typed in by hand appended them a SECOND time. The scrape deduped and pulled that
+# creator once while the Board counted two pages.
+
+import pytest
+
+from api.app import _norm_page_handle
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("uptown_jor", "uptown_jor"),
+    ("@uptown_jor", "uptown_jor"),
+    ("https://www.instagram.com/uptown_jor", "uptown_jor"),
+    ("https://www.instagram.com/uptown_jor/", "uptown_jor"),
+    ("http://instagram.com/uptown_jor/reels/", "uptown_jor"),
+    ("https://www.instagram.com/uptown_jor?hl=en", "uptown_jor"),
+    ("  https://www.instagram.com/uptown_jor  ", "uptown_jor"),
+    ("https://x.com/jack", "jack"),
+    ("https://www.youtube.com/@MrBeast", "MrBeast"),
+    # channel/ and user/ introduce the id rather than being it
+    ("https://www.youtube.com/channel/UCX6OQ3DkcsbYNE6H8uQQuVA", "UCX6OQ3DkcsbYNE6H8uQQuVA"),
+    ("UCX6OQ3DkcsbYNE6H8uQQuVA", "UCX6OQ3DkcsbYNE6H8uQQuVA"),
+    ("", ""),
+])
+def test_every_spelling_of_a_creator_normalizes_to_one_identity(line, expected):
+    assert _norm_page_handle(line) == expected
+
+
+def test_case_is_not_folded():
+    """Instagram handles are case-insensitive; YouTube channel ids are NOT. Folding case
+    here would merge two genuinely different channels into one."""
+    assert _norm_page_handle("UCabcDEF") != _norm_page_handle("ucABCdef")
+
+
+def test_discovery_will_not_re_add_a_handle_typed_by_hand(hub):
+    """The reproduction: a human types the bare handle, AutoSearch approves the URL form."""
+    from api.app import _append_handle_to_pages, _watchlist
+
+    _pages_file(hub).write_text("# my watchlist\nuptown_jor\n", encoding="utf-8")
+    assert _append_handle_to_pages("instagram", "https://www.instagram.com/uptown_jor") is False
+    assert len(_watchlist("instagram")) == 1
+
+    assert _append_handle_to_pages("instagram", "https://www.instagram.com/someone_new") is True
+    assert len(_watchlist("instagram")) == 2
+
+
+def test_the_count_matches_what_a_scrape_will_fetch(hub):
+    """A file that already carries both spellings must still count one creator — otherwise
+    the Sources card describes the file rather than the run."""
+    from api.app import _watchlist
+
+    _pages_file(hub).write_text(
+        "# comment\nuptown_jor\nhttps://www.instagram.com/uptown_jor/\n@uptown_jor\nother\n",
+        encoding="utf-8",
+    )
+    assert len(_watchlist("instagram")) == 2

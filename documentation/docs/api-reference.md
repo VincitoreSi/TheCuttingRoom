@@ -21,6 +21,39 @@ Three IDs tie the whole surface together. Keep them in view while reading the ta
 
 ---
 
+## Hub identity
+
+| Method & path | Purpose |
+|---|---|
+| `GET /api/hub` | Which checkout this hub is, and whether it is still running the code on disk. |
+
+```json
+{
+  "root": "/Users/you/fashion/ReelScraper",
+  "niche": "Fashion",
+  "stale": false,
+  "source_mtime": 1784636656.57,
+  "source_mtime_now": 1784636656.57
+}
+```
+
+Two callers depend on this, both guarding against a silent failure:
+
+- **`root`** — every agent compares it against its own sibling `ReelScraper` at startup and
+  refuses to run if they differ. With two clones on one machine (see
+  [Niches](niches.md#running-two-niches-at-once)), a `BACKEND_API` pointing at the wrong one
+  writes this niche's work into that niche's corpus while every call returns 200.
+- **`stale`** — true when the hub's Python sources changed after the process imported them.
+  A module is loaded once and served from memory, so a hub that outlived a `git pull` keeps
+  answering with the *old* API while the Dashboard on disk is new; the Board then asks for
+  fields that response has never had and renders `undefined`. `./init`, `./demo` and
+  `./health` restart a stale hub rather than adopting it.
+
+!!! warning "A 404 here is an answer"
+    A hub older than this route does not serve it. Treat that as stale — it is, by
+    definition, older than the code that added the route. Unreachable is *not* the same as
+    stale, and must not be treated as a mismatch.
+
 ## Platforms
 
 | Method & path | Purpose |
@@ -92,6 +125,14 @@ is `null` and `reason` says what that is.
 
 !!! warning "Secrets never leave the local agent"
     The hub stores only the **name** of an environment variable a secret is expected in (e.g. `GEMINI_API_KEY`), never its value. `secrets/status` reports `{name, env_var, present, required}` so the Dashboard can show a red/green badge without ever seeing a key.
+
+    `present` is evaluated **per request** — the hub's own environment, plus that agent's
+    gitignored `.env`, which is where `./init` writes the key. It is OR-ed with what the
+    agent self-reported when it last registered, never overruled by it: an agent can read
+    sources the hub cannot see (AutoSearch accepts a `session.txt`; AnalysisEngine accepts
+    `GOOGLE_API_KEY` although its manifest names only `GEMINI_API_KEY`), so a live miss must
+    not report a working agent as broken. The consequence is that a key deleted by hand
+    reads as present until that agent registers again.
 
 ---
 

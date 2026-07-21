@@ -80,6 +80,55 @@ PY
 # hub_responding <url> — true if a hub is already serving there
 hub_responding() { curl -sf -o /dev/null --max-time 2 "$1/api/platforms" 2>/dev/null; }
 
+# hub_state <port> — classify whoever is listening: ours | stale | foreign
+#
+# "Something answered on 8787" is not "our hub is up", and answering is not the same as
+# running our code. Python imports a module once and serves it from memory for the life of
+# the process, so a hub started before a `git pull` (or before the tree was re-cloned over
+# the top) keeps serving the OLD API with nothing to show for it. The Dashboard is served
+# from disk and so IS current, which produces the worst version of the bug: a new frontend
+# asking a stale backend for fields it has never heard of, and rendering `undefined`.
+#
+#   ours     this checkout, running the code that is on disk — reuse it
+#   stale    this checkout, but the process predates the files — restart it
+#   foreign  a different checkout's hub — leave it alone and take another port
+#
+# The hub identifies itself over HTTP (`GET /api/hub`), which is authoritative: it reports
+# the ROOT it imported and whether its sources have changed underneath it. A hub too old to
+# have that route is, by definition, older than this code — that 404 IS the answer. In that
+# case fall back to the listener's cwd to tell "old hub of ours" from "someone else's".
+hub_state() {
+  local port="$1" body cwd
+  body="$(curl -sf --max-time 2 "http://127.0.0.1:$port/api/hub" 2>/dev/null || true)"
+
+  if [ -n "$body" ]; then
+    # The payload goes in as an ARGUMENT, not on stdin: stdin is already carrying the
+    # program itself (`python3 -` + heredoc), and piping the body in as well concatenates
+    # the two into one unparseable blob.
+    ROOT="$ROOT" python3 - "$body" <<'PY'
+import json, os, sys
+try:
+    d = json.loads(sys.argv[1])
+except ValueError:
+    print("foreign"); sys.exit(0)                    # answering nonsense: not ours to touch
+root = os.path.realpath(d.get("root") or "")
+mine = os.path.realpath(os.path.join(os.environ["ROOT"], "ReelScraper"))
+print("foreign" if root != mine else ("stale" if d.get("stale") else "ours"))
+PY
+    return 0
+  fi
+
+  # No /api/hub. Either a hub older than that route, or not one of ours at all — this is
+  # also the answer for a port held by some unrelated program, which claim_port must not
+  # take. Only a listener whose working directory is inside THIS checkout is claimable;
+  # everything else is "not ours", which is the safe way to be wrong.
+  cwd="$(hub_cwd "$port" 2>/dev/null || true)"
+  case "$cwd" in
+    "$ROOT"|"$ROOT"/*) printf 'stale\n' ;;
+    *)                 printf 'foreign\n' ;;
+  esac
+}
+
 # hub_cwd <port> — echo the working directory of the process LISTENING on that port.
 #
 # "A hub is answering on 8787" does not mean it is THIS checkout's hub. Anyone with a second
@@ -221,6 +270,103 @@ write_key() {
     printf '%s=%s\n' "$var" "$val" >> "$file"
     ok "wrote ${var} to ${file#"$ROOT"/}"
   fi
+}
+
+# set_key <VAR> <value> <env file> — like write_key, but CORRECTS an existing value.
+#
+# write_key's "already set, left alone" rule is right for secrets and wrong for settings
+# that this checkout owns: if the hub moves to another port, a BACKEND_API left alone is a
+# stale pointer at whatever now answers on the old one — which, with two clones on one
+# machine, is the other niche's hub. Silent, and it writes real data to the wrong corpus.
+set_key() {
+  local var="$1" val="$2" file="$3" tmp
+  [ -n "$val" ] || return 0
+  mkdir -p "$(dirname "$file")"; touch "$file"
+  if grep -q "^[[:space:]]*#\{0,1\}[[:space:]]*${var}=" "$file" 2>/dev/null; then
+    # Rewrites a commented-out line too (`# BACKEND_API=…` is how the examples ship it),
+    # so the setting lands where the template documents it instead of orphaned at the end.
+    tmp="$(mktemp)"
+    awk -v k="$var" -v v="$val" '
+      !filled && $0 ~ "^[[:space:]]*#?[[:space:]]*" k "=" { print k "=" v; filled=1; next } { print }
+    ' "$file" > "$tmp" && mv "$tmp" "$file"
+  else
+    printf '%s=%s\n' "$var" "$val" >> "$file"
+  fi
+}
+
+# ---------------------------------------------------------------- one machine, many clones
+# Two checkouts of this repo are a normal setup — one niche per clone — and they must not
+# be able to touch each other. Nothing in this project writes outside its own directory, so
+# the ONLY thing two clones share is the network: the port the hub listens on, and the
+# BACKEND_API every sibling agent dials. Get those two right and the isolation is total.
+
+# port_free <port> — true if we could bind it on the loopback right now.
+port_free() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import socket, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+
+# claim_port — the port THIS checkout owns. Decided once, then remembered forever.
+#
+# `free_port` asks the OS for any free port, which is fine for a one-shot smoke test and
+# useless as an address: it changes on every restart, so nothing can be bookmarked and no
+# .env can point at it. A second clone needs a port that is stable for as long as the
+# checkout exists, so the pin is written to ReelScraper/.env (gitignored — per install,
+# never shared) and honoured from then on.
+#
+# Scanning upward from 8787 keeps the numbers memorable: first clone 8787, second 8788.
+# A port already held by OUR OWN hub counts as claimable — re-running ./init against a live
+# hub must reclaim the same address, not walk to the next one every time.
+claim_port() {
+  local envf="$ROOT/ReelScraper/.env" pinned p
+  pinned="$(read_key HUB_PORT "$envf")"
+  case "$pinned" in
+    ''|*[!0-9]*) ;;                       # unset or not a number: fall through and claim
+    *)
+      # Honour the pin — unless another checkout got there first, in which case it is a
+      # pointer to somebody else's hub and re-claiming beats handing over this niche's data.
+      if port_free "$pinned" || [ "$(hub_state "$pinned")" != "foreign" ]; then
+        printf '%s\n' "$pinned"; return 0
+      fi
+      ;;
+  esac
+  for p in $(seq 8787 8816); do
+    if port_free "$p"; then
+      set_key HUB_PORT "$p" "$envf"; printf '%s\n' "$p"; return 0
+    fi
+    case "$(hub_state "$p")" in
+      ours|stale) set_key HUB_PORT "$p" "$envf"; printf '%s\n' "$p"; return 0 ;;
+    esac
+  done
+  # 30 consecutive ports busy is not a situation to paper over with a random one.
+  die "no free port in 8787-8816 — set HUB_PORT in ReelScraper/.env to pick one yourself"
+}
+
+# sync_backend_api <url> — point every agent IN THIS CHECKOUT at this checkout's hub.
+#
+# The hub exports BACKEND_API for the stages it spawns itself (ReelScraper/cli.py), so those
+# are always correct. Agents run BY HAND are not — `cd SimilarContent && uv run cli.py
+# propose` is in the README, and it resolves BACKEND_API from its own .env, which ships
+# pointing at 8787. On a second clone that is the FIRST clone's hub: the proposal is written
+# to another niche's studio, under that niche's corpus, and nothing anywhere reports an
+# error. Writing the real address into each .env is what stops that.
+sync_backend_api() {
+  local url="$1" c
+  for c in AnalysisEngine AutoSearch SimilarContent; do
+    [ -d "$ROOT/$c" ] || continue
+    set_key BACKEND_API "$url" "$ROOT/$c/.env"
+  done
+  [ -f "$ROOT/.env" ] && set_key BACKEND_API "$url" "$ROOT/.env"
+  return 0
 }
 
 # read_key <VAR> <env file> — echo VAR's value from a KEY=VALUE .env (nothing if unset or

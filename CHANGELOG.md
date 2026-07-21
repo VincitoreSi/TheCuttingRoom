@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Two clones on one machine can no longer touch each other**, which is what running two
+  niches at once requires. Nothing here writes outside its own directory, so the whole
+  coupling was the loopback: the port, and the `BACKEND_API` every agent dials.
+    - **A port per checkout.** `./init` pins one (8787, then 8788) into `ReelScraper/.env`
+      as `HUB_PORT`. A fallback port is useless as an address — it moved on every restart,
+      so nothing could be bookmarked and no `.env` could point at it. `--port` pins too.
+    - **`BACKEND_API` written into every component's `.env`** once the port is settled. The
+      hub only ever exported it for stages *it* spawned; an agent run by hand read its own
+      `.env`, which ships pointing at 8787 — so on a second clone `cd SimilarContent && uv
+      run cli.py propose` posted that niche's proposals into the *first* clone's studio,
+      against the first clone's corpus, with every call returning 200.
+    - **Agents refuse a hub that is not theirs.** Each checks `GET /api/hub` at startup and
+      exits 2 naming both directories. A definite mismatch is refused; silence (an older
+      hub, an unreachable one) is not treated as one.
+    - The Dashboard sidebar carries the **niche name**, since two boards are otherwise
+      pixel-identical, and `./stop` reports a foreign checkout on this clone's own port
+      rather than the hardcoded 8787.
+- **`GET /api/hub`** — `{root, niche, stale}`. `root` is what agents compare against;
+  `stale` is true when the hub's sources changed after the process imported them.
 - **`./stop`** — shuts down the hub and any stage jobs this checkout started. Processes
   are matched by working directory, not command line, so several clones on one machine
   never stop each other's hub; it reports a foreign checkout holding the port instead of
@@ -38,6 +57,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mutation swallowed its error.
 
 ### Fixed
+- **A hub that outlived a `git pull` kept serving the old API, and the Board said
+  "undefined pages".** Python imports a module once and serves it from memory, so a hub
+  left running from an earlier session goes on answering with the response shape it started
+  with — while the Dashboard, served from disk, is current. `./init` saw *something*
+  answering on 8787 and reused it, so a new frontend asked a three-hour-old backend for
+  `watchlist` and `scraped_items`, got neither, and rendered the word `undefined` where a
+  count belonged — a symptom pointing nowhere near the cause. `./init`, `./demo` and
+  `./health` now restart a stale hub instead of adopting it, and a missing count renders as
+  `—` rather than as a word to decode.
+- **A verified API key still showed as `SECRET MISSING`.** `GET /api/config/agent/{agent}/
+  secrets/status` replayed `present` out of `producers/registry.json` — whatever the agent
+  self-reported the last time it registered. Paste a key into `./init`, watch it verify
+  against Google, and the Agent Desk went on saying the secret was absent until that agent
+  next happened to run; the Board's readiness check, reading the `.env` directly, said the
+  opposite at the same moment. Presence is now evaluated per request against the hub's
+  environment and the agent's own `.env`, OR-ed with the self-report — the agent can see
+  sources the hub cannot (a `session.txt`, or `GOOGLE_API_KEY` where the manifest names
+  only `GEMINI_API_KEY`), so a live miss must never report a working agent as broken. Still
+  status only: the hub reads the file to test for a non-empty assignment and never holds,
+  returns or logs a value.
+- **The same creator could sit on the watchlist twice.** `pages.txt` accepts three
+  spellings — `handle`, `@handle`, and the profile URL — and every scraper collapses them
+  before fetching. The hub compared raw strings, so approving an AutoSearch candidate (which
+  posts the URL form) for a creator someone had typed by hand appended them again. The
+  scrape deduped and pulled them once while the Board counted two pages. Both the dedupe and
+  the count now normalize the way the scrapers do; case is deliberately not folded, since
+  YouTube channel ids are case-sensitive.
 - **`Run full pipeline` never ran a pipeline.** `POST /api/pipeline/{p}/run-all` was
   answered by the `/{platform}/{stage}` catch-all — registered above it, and Starlette
   matches in registration order — with `400 "stage must be one of [...]"`. With no
