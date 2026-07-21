@@ -1,3 +1,14 @@
+# Dependency updates.
+#
+# The ungrouped default opened 14 PRs within seconds of the first push — including major
+# bumps (typescript 5→7, vite 6→8, framer-motion 11→12, actions/checkout 4→7) that fail CI
+# and make a healthy repo look broken. So: minor and patch updates are batched into one PR
+# per ecosystem, majors get their own PR to be reviewed deliberately, and open PRs are
+# capped so a quiet week cannot bury the queue.
+#
+# This governs VERSION updates only. Dependabot *security* updates are a separate channel
+# (enabled on the repo) and are not limited by `open-pull-requests-limit` or by grouping —
+# a vulnerability fix still arrives immediately and on its own.
 version: 2
 updates:
   # Dashboard (npm)
@@ -5,12 +16,22 @@ updates:
     directory: "/Dashboard"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      dashboard-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
 
   # Python components (pip/uv)
   - package-ecosystem: "pip"
@@ -21,3 +42,8 @@ updates:
       - "/SimilarContent"
     schedule:
       interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
