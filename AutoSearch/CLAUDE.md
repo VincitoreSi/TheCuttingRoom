@@ -3,7 +3,7 @@
 **What this is.** AutoSearch (`auto-search`, kind `discovery`) is the pipeline's new front door —
 a SOURCE-side agent that searches Instagram (keyword search, related-creator chaining, guest
 profile hydration) to find new creators worth scraping, scores them for niche-fit (heuristics +
-a Claude relevance judgment), and posts them as **candidates** to the hub. A human approves
+an optional LLM relevance judgment), and posts them as **candidates** to the hub. A human approves
 candidates in the Dashboard → the hub appends the handle to `pages.txt` → the next scrape
 ingests them. It closes the loop that is manual today (hand-curated `pages.txt`).
 
@@ -25,23 +25,26 @@ and tell the operator to start it in ReelScraper (`uv run cli.py start`).
 
 ## Run commands
 ```
-uv sync                              # create .venv + install deps (anthropic, jsonschema)
+uv sync                              # create .venv + install deps (jsonschema only)
 uv run cli.py status                 # hub health + secret status + guest-only banner + config
 uv run cli.py run instagram          # manual/exhaustive discovery pass (still respects
                                       #   caps/pacing/breaker/kill-switch; bypasses the weekly plan)
 uv run cli.py beat instagram         # one bounded, idempotent heartbeat tick (§2 below)
-uv run cli.py synthetic instagram    # fabricate N candidates, no network/Anthropic — verification
+uv run cli.py synthetic instagram    # fabricate N candidates, no network, no LLM — verification
 uv run cli.py smoke                  # guest bootstrap (assert no sessionid) + one hydration
 ```
 
 ## To fully validate a LIVE run the operator must
-1. `export ANTHROPIC_API_KEY=...` (term expansion + relevance scoring), and
+1. OPTIONALLY `export GEMINI_API_KEY=...` **and** set `term_expansion_enabled: true` on the
+   agent's config desk. Both are needed — the flag is the spend switch and is checked first,
+   so a key exported for AnalysisEngine never silently bills discovery. Without them
+   discovery runs on the seed keywords alone, which is the supported default, and
 2. optionally supply a **burner** IG session (`IG_SESSIONID` env, or gitignored `session.txt`)
    to unlock login-gated surfaces — absence is normal, not an error (guest-only is the default
    and is expected to be shallower), and
 3. flip the kill-switch: `discovery_enabled: true` in this agent's hub config
    (`PUT /api/config/agent/auto-search`, or the Dashboard's config form).
-Without these, `status`/`synthetic`/`smoke`/the weekly-plan and Claude unit tests all still
+Without these, `status`/`synthetic`/`smoke`/the weekly-plan and Gemini unit tests all still
 work — that is exactly what §7 verification below proves.
 
 ---
@@ -158,8 +161,9 @@ board's discovery gate-join (keyed on `content_id == candidate_id`) lines up:
 1. **run.start** (after idempotent `register_producer` so config/secrets/board resolve).
 2. Pull niche + keywords (`GET /api/config/{p}` — the platform's `niche_config.json`) +
    `GET /api/corpus/{p}/factors` + the prior `trending-terms` shared insight.
-3. Term expansion (Anthropic §5 of PIPELINE.md) — no per-item events; falls back to the seed
-   keywords verbatim when no `ANTHROPIC_API_KEY` is present.
+3. Term expansion (Gemini, §5 of PIPELINE.md) — OFF by default; no per-item events. Runs
+   only when `term_expansion_enabled` is true AND a Gemini key resolves, and falls back to
+   the seed keywords verbatim in every other case (flag off, no key, bad JSON, API error).
 4. Per raw candidate: `item.start data.stage=Queued` → `item.stage Searching` → `item.stage Scoring`.
 5. Candidate posted (`POST /api/discovery/{p}`) → `item.done data={stage:"Proposed", score:<relevance>}`.
 6. Human approves/rejects → hub `gate.jsonl` → board gate-join moves the item to
@@ -187,15 +191,17 @@ engine/search.py        topsearch (burner), discover/chaining (burner), term->su
                         orchestration, caps, resume (<platform>_raw.json)
 engine/plan.py          weekly-plan generation/reload (§2), daily ledger, beat-gating logic
 engine/score.py         heuristic signals (followers, median_plays) + threshold gates
-engine/claude.py        anthropic.Anthropic(); expand_terms() + score_candidates()
-                        (messages.create + output_config json_schema, no thinking)
+engine/gemini.py        Gemini REST over stdlib urllib (no SDK); expand_terms() +
+                        score_candidates() (generateContent + responseSchema JSON mode).
+                        Optional: gated behind term_expansion_enabled.
 engine/memory.py        markdown memory: system_prompt.base, <platform>/notes, trending.md
-engine/schema.py        jsonschema validators for the 2 Claude outputs + the candidate payload
+engine/schema.py        jsonschema validators for the 2 LLM outputs + the candidate payload
 engine/circuit.py       CircuitBreaker(max_strikes=3) + CircuitTripped (verbatim ae/scraper pattern)
 engine/logsetup.py      per-run pretty console + JSONL
 memory/                 system_prompt.base.md, <platform>/notes.md, plan.json (gitignored),
                         caps/<date>.json (gitignored), trending.md
-tests/                  test_plan.py, test_schema.py, test_claude.py, smoke_hub.py
+tests/                  test_plan.py, test_schema.py, test_gemini.py,
+                        test_expansion_gate.py, smoke_hub.py
 ```
 
 ## Platform-wide conventions (PIPELINE.md §10)
@@ -204,6 +210,7 @@ tests/                  test_plan.py, test_schema.py, test_claude.py, smoke_hub.
 - **Config (§10.3):** `GET /api/config/agent/auto-search` at run start over defaults; knobs
   declared in the manifest `config_schema` (Dashboard-editable), including all cadence knobs and
   the `discovery_enabled` kill-switch (default **false**).
-- **Secrets (§10.4):** referenced by env-var NAME only (`ANTHROPIC_API_KEY`, `IG_SESSIONID`); the
+- **Secrets (§10.4):** referenced by env-var NAME only (`GEMINI_API_KEY` — declared
+  **optional**, since discovery runs keyword-only by default — and `IG_SESSIONID`); the
   hub sees status, never values. `.env.example` documents the names; `.env`/`session.txt` are
   gitignored.

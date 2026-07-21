@@ -152,7 +152,7 @@ posture and the known sharp edges — in [Run it in Docker](documentation/docs/d
 **Nothing here requires Claude Code, an editor, or an AI coding session.** Every stage is a
 plain CLI you can run, script, or put in cron. The `CLAUDE.md` files and `.claude/` directories
 exist so you *can* drive the agents conversationally, but the pipeline does not depend on them
-— the agents talk to Google and Anthropic REST APIs directly over stdlib HTTP.
+— the agents talk to Google's REST APIs directly over stdlib HTTP, with no vendor SDK.
 
 | To do this | You need | Costs money? |
 | --- | --- | --- |
@@ -162,7 +162,8 @@ exist so you *can* drive the agents conversationally, but the pipeline does not 
 | Blueprints (`AnalysisEngine`) | + `GEMINI_API_KEY` | yes — Gemini |
 | Clone recipes (`SimilarContent propose`) | nothing extra | no |
 | Rendering reels (`SimilarContent render`) | + `GEMINI_API_KEY`, **ffmpeg** | yes — ~$0.04/frame |
-| Creator discovery (`AutoSearch`) | + `ANTHROPIC_API_KEY` | yes — Anthropic |
+| Creator discovery (`AutoSearch`) | nothing extra | no |
+| …with LLM-widened search terms (opt-in) | + `GEMINI_API_KEY` **and** `term_expansion_enabled` | yes — Gemini |
 
 A first run that only wants to *look* at the system needs **uv and Python**. Scraping and
 scoring are free and keyless. Only the AI stages cost anything, and each is opt-in.

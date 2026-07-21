@@ -3,7 +3,7 @@
 
 These are the hard SAFETY floors/ceilings from AutoSearch/PIPELINE.md §1.3/§1.4 (pacing,
 breaker, per-run surface caps) plus the handful of other numeric constants scattered
-through the agent (Claude call shape, relevance blend weights, breaker defaults). Every
+through the agent (LLM call shape, relevance blend weights, breaker defaults). Every
 other module imports from here instead of hardcoding a literal, so a single file answers
 "what are this agent's non-negotiable numbers" for an operator or an auditor.
 
@@ -48,9 +48,15 @@ CHROME_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 BREAKER_MAX_STRIKES = 3
 BREAKER_DEFAULT_PACE_SECONDS = 2.0
 
-# ---- engine/claude.py call shape --------------------------------------------------------
-CLAUDE_MAX_TOKENS = 4096
+# ---- engine/gemini.py call shape --------------------------------------------------------
+# Named for the role, not the vendor: this agent has already moved Anthropic -> Gemini once,
+# and the constant did not need to change when it did.
+LLM_MAX_TOKENS = 4096
 
-# ---- engine/score.py relevance blend (heuristic vs. Claude judgment) ------------------
+# ---- engine/score.py relevance blend (heuristic vs. LLM judgment) ---------------------
+# NOTE: the LLM half is NOT reachable today. engine/search.py:85 calls
+# `combine_relevance(heuristic, None, None)`, so `score_candidates()` is never invoked and
+# candidate relevance is 100% heuristic regardless of any key. These weights only take
+# effect if that call site starts passing a real score.
 HEURISTIC_RELEVANCE_WEIGHT = 0.4
-CLAUDE_RELEVANCE_WEIGHT = 0.6
+LLM_RELEVANCE_WEIGHT = 0.6

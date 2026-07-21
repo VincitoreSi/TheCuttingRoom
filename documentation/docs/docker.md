@@ -193,7 +193,7 @@ HTTP hub**, never by touching each other's files.
 | Secret | Lives in | Reaches the container via |
 |---|---|---|
 | `GEMINI_API_KEY` | `AnalysisEngine/.env`, `SimilarContent/.env` | **the bind mount only** |
-| `ANTHROPIC_API_KEY`, Instagram burner session vars | `AutoSearch/.env` | the bind mount only |
+| `GEMINI_API_KEY` *(optional)*, Instagram burner session vars | `AutoSearch/.env` | the bind mount only |
 | X `auth_token` + `ct0` | `ReelScraper/platforms/x/session.txt` | the bind mount only (file-only, no env form) |
 
 The whole checkout is bind-mounted at `/app`, so those files are simply *there*, at the paths
@@ -202,7 +202,7 @@ each agent already reads them from. Nothing else is needed to deliver them.
 ```sh
 printf 'GEMINI_API_KEY=<your key>\n'    >> AnalysisEngine/.env
 printf 'GEMINI_API_KEY=<your key>\n'    >> SimilarContent/.env
-printf 'ANTHROPIC_API_KEY=<your key>\n' >> AutoSearch/.env
+printf 'GEMINI_API_KEY=<your key>\n' >> AutoSearch/.env   # optional — see AutoSearch docs
 chmod 600 AnalysisEngine/.env SimilarContent/.env AutoSearch/.env
 
 ./cr down && ./cr up      # the hub reads .env at import, so a restart is required

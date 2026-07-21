@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""engine/schema.py — jsonschema validators for the candidate payload + the two Claude
+"""engine/schema.py — jsonschema validators for the candidate payload + the two LLM
 output schemas (PIPELINE.md §5, AutoSearch/PIPELINE.md §5/§6/§7).
 
 Three documents are validated here:
   * CANDIDATE_SCHEMA        — the payload AutoSearch POSTs to `/api/discovery/{p}` (the hub's
                               `CandidateIn`). `handle` MUST be the pages.txt-matching full URL
                               form (`https://www.instagram.com/<handle>`), never a bare username.
-  * KEYWORD_EXPANSION_SCHEMA — Claude term-expansion output (§5, 1 call/run):
+  * KEYWORD_EXPANSION_SCHEMA — term-expansion output (§5, 1 call/run, optional):
                               {keywords[], hashtags[], audio_terms[]}.
-  * RELEVANCE_SCORE_SCHEMA   — Claude relevance-scoring output (§5, batched):
+  * RELEVANCE_SCORE_SCHEMA   — relevance-scoring output (§5, batched; not wired today):
                               {scores:[{handle, score, reasons[]}]}.
 
 `candidate_id()` mirrors the hub's own stable-hash algorithm exactly

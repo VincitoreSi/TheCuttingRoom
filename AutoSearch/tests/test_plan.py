@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tests/test_plan.py — the weekly-plan + beat-gating unit test (no network, no hub, no
-Anthropic).
+an LLM).
 
 Runnable two ways:
   * pytest:  `pytest -q`  (collects the `test_*` functions below)

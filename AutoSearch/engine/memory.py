@@ -2,7 +2,7 @@
 """engine/memory.py — the evolving markdown memory layer (mirrors AnalysisEngine's
 engine/memory.py, adapted to AutoSearch's directory layout, AutoSearch/PIPELINE.md §3).
 
-The effective Claude system prompt is COMPOSED from markdown on every run, never hardcoded:
+The effective LLM system prompt is COMPOSED from markdown on every run, never hardcoded:
 
     system_prompt.base.md        (stable role + schema rules)
   + memory/<platform>/notes.md   (per-platform discovery craft — IG != X != YT)

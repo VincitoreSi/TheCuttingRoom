@@ -32,7 +32,7 @@ The full flow from a manual/exhaustive `cli.py run` invocation: bootstrap, term 
 sequenceDiagram
     participant AS as AutoSearch
     participant Hub as Hub (/api/*)
-    participant Claude as Claude (Anthropic API)
+    participant LLM as Gemini (optional)
     participant IG as Instagram (guest/burner)
     participant Human as Human (Dashboard)
 
@@ -45,8 +45,11 @@ sequenceDiagram
     AS->>Hub: GET /api/corpus/{platform}/factors
     AS->>Hub: GET /api/insights (prior "trending-terms" insight)
 
-    AS->>Claude: expand_terms(niche, seed_keywords, factors, trending_insight)
-    Claude-->>AS: expanded search terms
+    opt term_expansion_enabled AND a Gemini key resolves
+        AS->>LLM: expand_terms(niche, seed_keywords, factors, trending_insight)
+        LLM-->>AS: expanded search terms
+    end
+    Note over AS: default is OFF — search the seed keywords verbatim, no API cost
 
     AS->>IG: GuestSession().bootstrap() (cookie/csrf)
     opt guest_only = false
@@ -98,7 +101,7 @@ flowchart TD
     PLAN["load_or_generate_plan()<br/>local, deterministic from week_seed(week_start)<br/>→ memory/plan.json"]
     GATE{"gate_beat(cfg, plan):<br/>rest_day? out_of_window?<br/>over daily_search_cap?<br/>breaker cooldown?<br/>random() &lt; beat_action_probability?"}
     NOOP["beat.skip (reason) — no hub POST<br/>'most beats no-op, that is the point'"]
-    SLICE["Bounded slice:<br/>terms = seed_keywords[:beat_max_units]<br/>(no Claude call per tick)<br/>guest bootstrap → discover_via_terms<br/>capped to ≤ beat_max_units"]
+    SLICE["Bounded slice:<br/>terms = seed_keywords[:beat_max_units]<br/>(never an LLM call per tick)<br/>guest bootstrap → discover_via_terms<br/>capped to ≤ beat_max_units"]
     LEDGER["increment_ledger() (local)"]
     LOG["post_log run.end (proposed, tripped)"]
 
@@ -117,7 +120,7 @@ flowchart TD
 | Weekly budget → daily allotments | `memory/plan.json`, regenerated deterministically from `week_seed(week_start)` | Purely local computation — not a hub call. Includes rest days. |
 | Heartbeat delivery | Hub's `_discovery_heartbeat_loop` (app.py) | Reads `config/agents/auto-search.json` directly, fail-closed, every `heartbeat_minutes` ± jitter. Only fires `auto-search-beat` if `discovery_enabled`. |
 | Beat gate | `planlib.gate_beat()` | Pure local function: rest day → out-of-window → over cap → breaker cooldown → probability roll. Any failure is a silent no-op (no hub POST for the skip). |
-| Bounded slice | `discover_via_terms(..., max_units=beat_max_units)` | Seed keywords only (no per-tick Claude call), capped to `beat_max_units` work units. |
+| Bounded slice | `discover_via_terms(..., max_units=beat_max_units)` | Seed keywords only (never a per-tick LLM call), capped to `beat_max_units` work units. |
 | Alternative delivery | OS cron, a `schedule` cloud routine, or a manual `cli.py run` | The heartbeat thread is the default, not the only, trigger path. |
 
 ## The safety contract
@@ -143,7 +146,7 @@ Unlike the analysis and studio agents, AutoSearch calls Claude directly (not via
 1. **Term expansion.** Given the niche config, seed keywords, corpus factors, and the prior "trending-terms" insight, Claude expands a short seed-keyword list into a richer set of search terms. This only happens on a manual/exhaustive `cli.py run` — heartbeat beats reuse seed keywords verbatim to stay cheap.
 2. **Relevance scoring.** Alongside a heuristic gate (`passes_gates()` on followers/median_plays/etc.), Claude judges niche-fit for each hydrated candidate, producing the `relevance: {score, reasons[]}` object attached to the candidate payload.
 
-If `ANTHROPIC_API_KEY` is absent, term expansion falls back to seed keywords verbatim — AutoSearch degrades gracefully rather than failing the run.
+Term expansion is **off by default**. It runs only when `term_expansion_enabled` is `true` on the agent's config desk **and** a Gemini key resolves (`GEMINI_API_KEY` / `GEMINI_KEY` / `GOOGLE_API_KEY`) — the same key every other agent uses. The flag is checked *before* the key, so having one exported for AnalysisEngine never silently starts billing discovery. In every other case — flag off, no key, malformed response, API error — AutoSearch searches the seed keywords verbatim. That is a complete, supported mode, not a degraded one: `GEMINI_API_KEY` is declared **optional** in the manifest and the hub marks the stage ready without it.
 
 ## Reference
 
@@ -182,7 +185,7 @@ If `ANTHROPIC_API_KEY` is absent, term expansion falls back to seed keywords ver
 | `POST /api/discovery/{platform}/{candidate_id}/status` | Approve/reject; on approve, appends to `pages.txt` and `discovery/{p}/gate.jsonl`. |
 
 !!! tip "Verification without touching Instagram"
-    `cli.py smoke` asserts the guest cookie jar carries no `sessionid` and performs one `web_profile_info` hydration — no hub writes besides logs. `cli.py synthetic` fabricates N candidates locally (no IG/Anthropic calls) and drives the identical `item.start → Searching → Scoring → post_candidate → item.done` sequence, useful for testing the Dashboard's discovery lane end-to-end.
+    `cli.py smoke` asserts the guest cookie jar carries no `sessionid` and performs one `web_profile_info` hydration — no hub writes besides logs. `cli.py synthetic` fabricates N candidates locally (no Instagram or LLM calls) and drives the identical `item.start → Searching → Scoring → post_candidate → item.done` sequence, useful for testing the Dashboard's discovery lane end-to-end.
 
 ## See also
 

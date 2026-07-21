@@ -247,7 +247,7 @@ only**; the hub can report presence but never contents:
 GET /api/config/agent/{agent}/secrets/status → [{name, env_var, present, required}]
 ```
 
-Actual credentials (Gemini keys, Anthropic keys, Instagram session cookies) stay local to the
+Actual credentials (Gemini keys, Instagram session cookies) stay local to the
 agent process that needs them, referenced everywhere else purely by the env-var name.
 
 ## Pipeline control

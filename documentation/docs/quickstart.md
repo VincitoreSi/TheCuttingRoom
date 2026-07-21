@@ -10,7 +10,7 @@ This page gets the pipeline running end-to-end on your machine: install the hub,
 | **Python ≥ 3.10** | Runtime for the hub and all agents | Managed transparently by uv |
 | **Node.js** | Builds the Dashboard frontend | Only needed if you're building the Dashboard from source rather than using a prebuilt `frontend/dist` |
 | **Gemini API key** | Required by AnalysisEngine | Frame-by-frame video analysis that writes blueprints; without it the Blueprint stage exits with an error |
-| **Anthropic API key** *(optional)* | Powers AutoSearch's niche-fit relevance judgment and search-term expansion | Falls back to seed keywords verbatim if absent |
+| **Gemini API key** *(optional, for discovery)* | Widens AutoSearch's search terms — **off by default**, needs `term_expansion_enabled: true` as well | Searches your seed keywords verbatim, at no cost |
 | **Burner Instagram session** *(optional)* | Lets AutoSearch do authenticated topic search | AutoSearch and ReelScraper are guest-first by default; the burner is opt-in and paced strictly slower than the scraper |
 
 !!! note "Secrets stay local"
@@ -38,7 +38,9 @@ export GEMINI_API_KEY="..."
 # AutoSearch (optional)
 cd ../AutoSearch
 uv sync
-export ANTHROPIC_API_KEY="..."   # optional — enables term expansion + relevance judgment
+# Optional. The SAME key as AnalysisEngine/SimilarContent — one key for every agent that
+# can spend credits. Discovery does not use it unless you also set term_expansion_enabled.
+export GEMINI_API_KEY="..."
 ```
 
 !!! tip "BACKEND_API"
