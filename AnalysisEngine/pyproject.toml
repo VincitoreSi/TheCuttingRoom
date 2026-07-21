@@ -5,7 +5,7 @@ description = "AnalysisEngine — Gemini-powered short-form-video analyzer that 
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "jsonschema>=4.21",
+    "jsonschema>=4.26.0",
     "yt-dlp>=2024.1",
 ]
 
