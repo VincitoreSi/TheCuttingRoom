@@ -199,6 +199,56 @@ def test_clean_still_wipes_generated_data_when_git_works(tmp_path):
     assert list((root / "backups").glob("*.zip")), "the archive is written before deleting"
 
 
+def test_clean_wipes_the_watchlist_the_demo_dataset_wrote(tmp_path):
+    """`./demo` writes REAL creator handles into pages.txt; `./clean` must take them back out.
+
+    The reported bug: run ./demo on a fresh clone, run ./clean, and the Dashboard still shows
+    the demo dataset's sources. pages.txt was absent from data_paths(), so ./clean deleted
+    content.json and profiles_meta.json out of that very directory and left the one file in it
+    carrying third-party handles.
+
+    A fresh clone has `pages.txt.example` and no `pages.txt` — the file is gitignored and
+    untracked — so leaving it behind also breaks ./clean's own "wipe back to a fresh clone"
+    contract. It is archived before deletion like everything else, so it is recoverable.
+    """
+    root = _sandbox(tmp_path, "watchlist")
+    pages = root / "ReelScraper" / "platforms" / "instagram" / "pages.txt"
+    pages.parent.mkdir(parents=True)
+    pages.write_text("# handpicked handles\nexample_creator_one\nexample_creator_two\n")
+    # the example is TRACKED and must survive — it is what a fresh clone ships
+    example = pages.parent / "pages.txt.example"
+    example.write_text("# copy me to pages.txt\n")
+    corpus = pages.parent / "content.json"
+    corpus.write_text("[]")
+
+    git = ["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(git + ["add", "ReelScraper/platforms/instagram/pages.txt.example"], check=True)
+    subprocess.run(git + ["commit", "-qm", "seed"], check=True)
+
+    r = _bash("./clean --yes </dev/null", root)
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not corpus.exists(), "content.json must go (it always did)"
+    assert example.exists(), "pages.txt.example is tracked source and must survive"
+    assert not pages.exists(), (
+        "pages.txt survived ./clean, so the demo dataset's creator handles are still on the "
+        "watchlist and still rendered in the Dashboard's Sources card")
+
+
+def test_data_paths_covers_the_watchlist_for_every_platform(tmp_path):
+    """The list is globbed per platform, so a new platform must be covered the day it appears."""
+    root = _sandbox(tmp_path, "dp")
+    for p in ("instagram", "x", "youtube", "tiktok"):
+        (root / "ReelScraper" / "platforms" / p).mkdir(parents=True)
+    r = _bash(f'ROOT="{root}"; . "{root}/scripts/_common.sh"; data_paths', root)
+    emitted = set(r.stdout.split())
+    missing = [f"ReelScraper/platforms/{p}/pages.txt"
+               for p in ("instagram", "x", "youtube", "tiktok")
+               if f"ReelScraper/platforms/{p}/pages.txt" not in emitted]
+    assert not missing, f"data_paths() omits the watchlist for: {missing}"
+
+
 # --------------------------------------------------------------------------- ./health
 def test_health_fails_rather_than_skips_when_git_is_broken():
     """A textual check, deliberately: running ./health for real means running everything.
