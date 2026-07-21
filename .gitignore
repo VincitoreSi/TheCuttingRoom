@@ -151,6 +151,13 @@ ReelScraper/config/agents/
 # Automatic-run settings, incl. a last_run_at timestamp. Per-install state, not a shared
 # default — committing it would hand every clone somebody else's schedule and clock.
 ReelScraper/config/pipeline_schedule.json
+# Cascade settings, incl. the per-stage high-water MARKS — how much of this install's own
+# corpus each boundary has already consumed. Same reasoning as the schedule above, and
+# sharper: a committed mark describes data that only existed on one machine, so every clone
+# would start out believing it had already processed a corpus it has never seen. The hub
+# resolves a missing file to "every platform disabled, every mark 0", which is the correct
+# state for a fresh clone; the checked-in copy of the shape lives in the docs.
+ReelScraper/config/pipeline_cascade.json
 
 # ---- the demo dataset ships SEPARATELY, never in the repo ----
 # demo-data/data/ holds REAL scraped Instagram data (handles, captions, metrics, derived

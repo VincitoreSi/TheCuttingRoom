@@ -13,6 +13,7 @@ Skips files already present. Polite, sequential, with a short delay.
 import sys, json, time, argparse, logging, urllib.request
 from pathlib import Path
 
+from core.atomicio import atomic_path
 from core.logsetup import setup_logging
 
 ROOT = Path(__file__).parent
@@ -21,9 +22,22 @@ log = logging.getLogger("media")
 
 
 def _get(url, dest):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
-        f.write(r.read())
+    """Download to `<dest>.part`, rename only once the whole body has landed.
+
+    The widest corruption window in the repo used to be right here: `open(dest, "wb")` sat
+    in the same `with` as `urlopen`, so the file at its FINAL name was truncated for the
+    entire download — up to sixty seconds per clip. And the damage was permanent, because
+    the loop below skips any clip whose `.mp4` already exists: a truncated file is never
+    retried, `_media_count` in the hub counts it toward analysis readiness, and
+    AnalysisEngine then uploads the ruin to a PAID API and pays to analyse nothing.
+
+    `.part` is invisible to `glob("*.mp4")` and to the exact `f"{cid}.mp4"` lookups the hub
+    does, so an interrupted download leaves the clip simply absent — which is the state the
+    `not mp4.exists()` retry was written for."""
+    with atomic_path(dest) as tmp:
+        req = urllib.request.Request(url, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+            f.write(r.read())
 
 
 def main():

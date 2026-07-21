@@ -81,7 +81,16 @@ def _norm(text: str) -> str:
 def append_pattern(lesson: str) -> bool:
     """Append a distilled lesson to patterns.md, deduped (case/space-insensitive).
 
-    Returns True if a NEW lesson was written, False if it was already present."""
+    Returns True if a NEW lesson was written, False if it was already present.
+
+    APPENDS rather than rewriting the whole file. This used to read patterns.md, add one
+    bullet, and write the lot back — a read-modify-write whose truncate-at-open() window
+    covered the ENTIRE accumulated memory, not just the new line. A stop or a crash landing
+    there did not lose one lesson, it lost every lesson ever distilled, and nothing would
+    have reported it: `_read`'s `except FileNotFoundError: return ""` and the bullet parser
+    both treat a ruined file as "no patterns yet", so the next run would have composed a
+    system prompt with no learned rules at all and simply carried on. A pure append cannot
+    damage what is already in the file, which is better than making the rewrite survivable."""
     lesson = lesson.strip().lstrip("-*").strip()
     if not lesson:
         return False
@@ -90,17 +99,21 @@ def append_pattern(lesson: str) -> bool:
     if _norm(lesson) in {_norm(b) for b in _bullets(existing)}:
         log.debug("pattern already known, skipping", extra={"lesson": lesson[:80]})
         return False
-    if existing and not existing.endswith("\n"):
-        existing += "\n"
-    if not existing:
-        existing = "# Learned patterns (auto-appended, deduped)\n\n"
-    path.write_text(existing + f"- {lesson}\n", encoding="utf-8")
+    with open(path, "a", encoding="utf-8") as f:
+        if not existing:
+            f.write("# Learned patterns (auto-appended, deduped)\n\n")
+        elif not existing.endswith("\n"):
+            f.write("\n")
+        f.write(f"- {lesson}\n")
     log.info("appended learned pattern", extra={"lesson": lesson[:80]})
     return True
 
 
 def append_platform_note(platform: str, note: str) -> bool:
-    """Append a platform-specific craft note (deduped)."""
+    """Append a platform-specific craft note (deduped).
+
+    A true append, for the same reason as `append_pattern`: the old read-modify-write put
+    every craft note this platform had ever learned inside one truncate window."""
     note = note.strip().lstrip("-*").strip()
     if not note:
         return False
@@ -108,7 +121,8 @@ def append_platform_note(platform: str, note: str) -> bool:
     existing = _read(path)
     if _norm(note) in {_norm(b) for b in _bullets(existing)}:
         return False
-    if existing and not existing.endswith("\n"):
-        existing += "\n"
-    path.write_text(existing + f"- {note}\n", encoding="utf-8")
+    with open(path, "a", encoding="utf-8") as f:
+        if existing and not existing.endswith("\n"):
+            f.write("\n")
+        f.write(f"- {note}\n")
     return True

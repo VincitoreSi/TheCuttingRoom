@@ -52,6 +52,22 @@ def test_an_unreadable_schedule_file_fails_closed(hub):
     assert _sched(hub)["enabled"] is False
 
 
+def test_a_hand_edited_schedule_that_reads_false_is_false(hub, launched):
+    """`bool("false")` is True. A file that literally says `false` — what a jq edit or a
+    YAML->JSON conversion produces — used to switch the timer on AND opt it into the paid
+    stage. Only a real boolean is an answer here."""
+    (hub.root / "config").mkdir(parents=True, exist_ok=True)
+    (hub.root / "config" / "pipeline_schedule.json").write_text(json.dumps({
+        "instagram": {"enabled": "false", "include_blueprints": "false",
+                      "every_hours": 24, "last_run_at": 0}}), encoding="utf-8")
+
+    row = _sched(hub)
+
+    assert row["enabled"] is False
+    assert row["include_blueprints"] is False
+    assert hub.mod._schedule_tick(now=time.time() + 25 * 3600) == []
+
+
 def test_enabling_starts_the_clock_rather_than_firing_immediately(hub, launched):
     """last_run_at defaults to 0, so without this, switching the schedule on would look
     overdue by 55 years and start a scrape on the spot."""

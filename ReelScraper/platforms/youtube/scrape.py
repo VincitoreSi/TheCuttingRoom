@@ -45,6 +45,8 @@ import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from core.logsetup import setup_logging  # noqa: E402
+from core.atomicio import write_text_atomic  # noqa: E402
+from core.stopflag import install_stop_handler, stop_requested, sleep_unless_stopped  # noqa: E402
 
 HERE = Path(__file__).parent
 log = logging.getLogger("youtube.scrape")
@@ -402,6 +404,9 @@ def _load_json(p: Path):
 
 def main():
     setup_logging("scrape", platform="youtube")
+    # Own SIGTERM before anything is written: the default disposition kills the process
+    # mid-write, and shorts_raw.json is this platform's corpus. See core/stopflag.py.
+    install_stop_handler()
     ap = argparse.ArgumentParser(description="YouTube Shorts virality scraper (key-free InnerTube)")
     ap.add_argument("channels", nargs="*", help="@handles, UC ids, or channel URLs")
     ap.add_argument("--file", help="input file (one channel per line)")
@@ -436,7 +441,15 @@ def main():
     log.info("plan", extra={"assigned": len(channels), "scraping": len(todo), "limit": args.limit, "engagement": not args.fast})
 
     stopped = False
+    by_request = False
     for n, c in enumerate(todo, 1):
+        # Stopping is free here and nowhere else: both files are rewritten wholesale after
+        # every channel, so everything up to this point is already durable on disk.
+        if stop_requested():
+            log.warning("stop requested — ending after the last saved channel",
+                        extra={"scraped_this_run": n - 1, "remaining": len(todo) - n + 1})
+            stopped = by_request = True
+            break
         log.info("channel start", extra={"i": n, "of": len(todo), "channel": c})
         try:
             resolved = load_channel(c)
@@ -462,14 +475,25 @@ def main():
         done_keys.add(key.lstrip("@"))
         if followers is not None:
             meta_all[key] = {"followers": followers}
-        shorts_path.write_text(json.dumps(shorts_all, ensure_ascii=False, indent=1), encoding="utf-8")
-        meta_path.write_text(json.dumps(meta_all, ensure_ascii=False, indent=1), encoding="utf-8")
+        # META BEFORE CORPUS: resume skips channels already present in shorts_raw.json, so
+        # dying between these two writes with the corpus first would leave the channel in
+        # the corpus and out of profiles_meta.json — never re-fetched, no subscriber count,
+        # and core/virality.py divides engagement_rate and reach_multiplier by followers,
+        # so both signals would be permanently null for that channel. Written this way
+        # round, the worst case is a meta entry the next run simply overwrites.
+        write_text_atomic(meta_path, json.dumps(meta_all, ensure_ascii=False, indent=1))
+        write_text_atomic(shorts_path, json.dumps(shorts_all, ensure_ascii=False, indent=1))
         log.info("channel done", extra={"channel": c, "key": key, "shorts": len(videos)})
         if n < len(todo):
-            time.sleep(random.uniform(*CREATOR_DELAY))
+            # Interruptible: PEP 475 resumes a bare sleep after the handler returns, so the
+            # flag alone would leave a Stop press looking ignored for the whole delay.
+            sleep_unless_stopped(random.uniform(*CREATOR_DELAY))
 
     total = sum(len(v) for v in shorts_all.values())
-    status = "STOPPED EARLY (rate limit)" if stopped else "DONE"
+    # A stop is a normal outcome, not a failure: this still exits 0, and the hub tells a
+    # stop from a crash by its own marker rather than by the return code.
+    status = ("STOPPED (by request)" if by_request
+              else "STOPPED EARLY (rate limit)" if stopped else "DONE")
     log.info("%s — %d shorts across %d channels -> %s", status, total, len(shorts_all), shorts_path.name,
              extra={"status": status, "shorts": total, "channels": len(shorts_all)})
     log.info("next: run `python run.py analyze`")

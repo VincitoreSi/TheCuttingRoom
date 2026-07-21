@@ -41,6 +41,8 @@ import openpyxl
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from core.logsetup import setup_logging  # noqa: E402
+from core.atomicio import write_text_atomic, atomic_path  # noqa: E402
+from core.stopflag import install_stop_handler, stop_requested, sleep_unless_stopped  # noqa: E402
 
 HERE = Path(__file__).parent
 log = logging.getLogger("instagram.scrape")
@@ -314,7 +316,15 @@ def rows_and_summary(raw_all, meta_all):
 
 
 def save_outputs(out_xlsx, raw_json, all_rows, raw_all, summary):
-    raw_json.write_text(json.dumps(raw_all, ensure_ascii=False, indent=1), encoding="utf-8")
+    """Rewrite the corpus + workbook wholesale, atomically.
+
+    Both writes go through a temp file and a rename. `reels_raw.json` IS the corpus, and
+    the old `write_text` truncated it at open(): a signal landing one instruction later
+    left it short, the next run's `except: raw_all = {}` read that as an empty corpus, and
+    the run after that wrote `{}` over everything that had survived — silently, rc 0. The
+    Stop button makes signals here an ordinary event, so this is no longer a rare window.
+    """
+    write_text_atomic(raw_json, json.dumps(raw_all, ensure_ascii=False, indent=1))
     out = openpyxl.Workbook()
     sh = out.active; sh.title = "Reels"
     cols = list(all_rows[0].keys()) if all_rows else []
@@ -327,7 +337,11 @@ def save_outputs(out_xlsx, raw_json, all_rows, raw_all, summary):
     for c, n in summary:
         s2.append([c, n])
     s2.append(["TOTAL", sum(n for _, n in summary)])
-    out.save(out_xlsx)
+    # openpyxl opens a ZipFile on the path it is handed and streams the whole workbook into
+    # it, so the DESTINATION is truncated for the entire serialization — a far wider window
+    # than a json dump. Save to the temp, then promote.
+    with atomic_path(out_xlsx) as tmp_xlsx:
+        out.save(tmp_xlsx)
 
 def main():
     ap = argparse.ArgumentParser()
@@ -340,6 +354,12 @@ def main():
     ap.add_argument("--workers", type=int, default=1)
     args = ap.parse_args()
     setup_logging("scrape", platform="instagram")
+    # Take SIGTERM over before anything is written. The hub's Stop button signals this
+    # process group; under the default disposition that would end the run between two
+    # bytecodes, which is how reels_raw.json used to end up truncated. With a handler
+    # installed the signal only sets a flag, and the loop below stops at the next creator
+    # boundary — where everything is already on disk.
+    install_stop_handler()
 
     # reel limit: CLI wins, else niche_config.json, else 250
     if args.limit is None:
@@ -409,7 +429,16 @@ def main():
         raw_all = {}
     kept = len(raw_all)
     stopped = False
+    by_request = False
     for n, c in enumerate(todo, 1):
+        # The one point at which stopping is free: everything up to here is already saved.
+        # Reuses the same `stopped` flag the rate-limit circuit breaker sets, so both early
+        # exits share the one final-save path below.
+        if stop_requested():
+            log.warning("stop requested — ending after the last saved creator",
+                        extra={"scraped_this_run": n - 1, "remaining": len(todo) - n + 1})
+            stopped = by_request = True
+            break
         log.info("creator start", extra={"i": n, "of": len(todo), "creator": c})
         try:
             prof, items = scrape_creator(c, args.limit)
@@ -421,14 +450,28 @@ def main():
             meta_all[c] = prof
         raw_all[c] = items
         all_rows, summary = rows_and_summary(raw_all, meta_all)
+        # META BEFORE CORPUS, and that order is load-bearing. Resume keys on presence in
+        # raw_all, so dying between the two writes with the corpus written FIRST left the
+        # creator present in the corpus and absent from profiles_meta.json — skipped
+        # forever on every later run, its follower count never re-fetched, and
+        # core/virality.py divides engagement_rate and reach_multiplier by followers. That
+        # creator's two strongest signals would be permanently null. This way round the
+        # worst case is a meta entry for a creator not yet in the corpus, which the next
+        # run simply overwrites when it scrapes them.
+        write_text_atomic(meta_json, json.dumps(meta_all, ensure_ascii=False, indent=1))
         save_outputs(out_xlsx, raw_json, all_rows, raw_all, summary)
-        meta_json.write_text(json.dumps(meta_all, ensure_ascii=False, indent=1), encoding="utf-8")
-        time.sleep(random.uniform(*CREATOR_DELAY))
+        # Interruptible: PEP 475 RESUMES a bare time.sleep after the stop handler returns,
+        # so the flag alone could not shorten a 10-20s wait and a Stop press would look
+        # ignored for up to twenty seconds.
+        sleep_unless_stopped(random.uniform(*CREATOR_DELAY))
 
     all_rows, summary = rows_and_summary(raw_all, meta_all)
+    write_text_atomic(meta_json, json.dumps(meta_all, ensure_ascii=False, indent=1))
     save_outputs(out_xlsx, raw_json, all_rows, raw_all, summary)
-    meta_json.write_text(json.dumps(meta_all, ensure_ascii=False, indent=1), encoding="utf-8")
-    status = "STOPPED EARLY (rate limit)" if stopped else "DONE"
+    # A stop is a normal outcome, not a failure — the process still exits 0 below, and the
+    # hub tells a stop from a crash by its own marker, never by the return code.
+    status = ("STOPPED (by request)" if by_request
+              else "STOPPED EARLY (rate limit)" if stopped else "DONE")
     # Report the corpus TOTAL and what this run added separately. The old line reported
     # only this run's additions, so a resumed run that legitimately had nothing to do
     # said "0 reels across 0 creators" — indistinguishable from a scrape that failed to

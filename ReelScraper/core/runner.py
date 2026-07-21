@@ -13,6 +13,7 @@ import sys, argparse, logging
 from pathlib import Path
 
 from core import virality
+from core.atomicio import write_text_atomic
 from core.logsetup import setup_logging
 from core.memory import ContentMemory, SharedInsights
 
@@ -34,7 +35,10 @@ def run_cli(platform, here, load_records):
         # machine-readable feed for the API hub / media layer / frontend
         import json as _json
         clean = [{k: v for k, v in r.items() if k not in ("_content",)} for r in rows]
-        (here / "content.json").write_text(_json.dumps(clean, ensure_ascii=False), encoding="utf-8")
+        # Atomic: download_media.py's `json.loads` of this file is UNCAUGHT, so a torn
+        # content.json makes the media stage die with a traceback instead of the friendly
+        # "no content.json — run analyze first" it prints when the file is simply absent.
+        write_text_atomic(here / "content.json", _json.dumps(clean, ensure_ascii=False))
         mem = ContentMemory(platform)
         added = mem.upsert(rows)
         n_viral = sum(1 for r in rows if r.get("tier") == "Viral")

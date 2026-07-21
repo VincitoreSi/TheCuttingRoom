@@ -9,7 +9,7 @@ The frontend (a separate agent builds it) consumes the REST + SSE here; Claude C
 can use the same surface. Run via `python -m uvicorn api.app:app` or the `cli.py start`.
 """
 import json, subprocess, threading, time, asyncio, hashlib, os, random, urllib.request
-import base64, re, shutil, ipaddress, socket, urllib.parse
+import base64, re, shutil, ipaddress, socket, urllib.parse, signal
 from pathlib import Path
 
 from typing import Any, Optional
@@ -24,6 +24,7 @@ from pydantic import BaseModel
 import sys, logging
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from core.atomicio import write_text_atomic, replace_atomic, part_path
 from core.corpus import Corpus
 from core.logsetup import setup_logging
 from core.memory import SharedInsights
@@ -48,6 +49,23 @@ class ScheduleIn(BaseModel):
     # analysis-engine spends API credits per clip; unattended, that adds up. Off unless
     # the operator explicitly asks for it.
     include_blueprints: Optional[bool] = None
+
+
+class CascadeIn(BaseModel):
+    """Cascade settings for one platform: how much NEW input each boundary waits for before
+    it fires the next stage. Every field optional so the UI can toggle one thing without
+    resending the rest.
+
+    There is deliberately NO field here that names a stage. The stages the cascade may
+    launch are the fixed `CASCADE_STAGES` list, `render` is not in it, and `steps` keys
+    outside that list are dropped on read — so no request to this model, and no hand-edit
+    of the file it writes, can make an unattended trigger spend image-API credits."""
+    enabled: Optional[bool] = None
+    # The analysis-engine boundary calls a paid API per clip. Same name, same default and
+    # same reasoning as the scheduler's flag above.
+    include_blueprints: Optional[bool] = None
+    steps: Optional[dict[str, int]] = None
+    propose_count: Optional[int] = None
 
 
 class Proposal(BaseModel):
@@ -352,6 +370,13 @@ def _on_startup():
     except Exception as e:
         # same rule as discovery: a scheduler must never be able to block startup
         log.error("failed to start pipeline scheduler", extra={"err": str(e)})
+    try:
+        threading.Thread(target=_cascade_loop, daemon=True).start()
+        log.info("pipeline cascade thread started (idle unless a platform is enabled)")
+    except Exception as e:
+        # same rule again. The cascade is off by default and fails closed on any config
+        # problem, so the worst case of this branch is that nothing flows on its own.
+        log.error("failed to start pipeline cascade", extra={"err": str(e)})
 
 # ---------------- helpers ----------------
 def pdir(platform):
@@ -407,9 +432,17 @@ def _read_json(path, default):
 
 
 def _write_json(path, obj):
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(obj, ensure_ascii=False, indent=1), encoding="utf-8")
+    """Every whole-file JSON the hub owns, written atomically.
+
+    This one function backs producers/registry.json, references/<p>/registry.json, the
+    studio meta.json, config/agents/<agent>.json and discovery/<p>/candidates.json — all of
+    them read straight back with `_read_json`, whose `except: return default` turns a
+    half-written file into "there is nothing here". A torn registry does not raise, it
+    silently un-registers every producer; a torn candidates.json silently discards a
+    reviewed discovery queue. Routing them all through a temp file plus a rename is the
+    cheapest safety-per-line change available, and matches what the render-asset writer
+    below has always done."""
+    write_text_atomic(path, json.dumps(obj, ensure_ascii=False, indent=1))
 
 
 def _append_jsonl(path, rec):
@@ -680,6 +713,13 @@ def stage_readiness(platform):
             "No Gemini key. Set GEMINI_API_KEY in AnalysisEngine/.env, then restart the hub.")
     else:
         out["analysis-engine"] = st(True)
+    # propose reads the SCORED CORPUS; blueprints are optional enrichment that the producer
+    # logs about and continues without. The only thing that makes it fail outright is an
+    # empty corpus. The CASCADE's trigger for propose counts blueprints — a different
+    # question ("is there new work for it?") from the one this answers ("can it run at
+    # all?"), and conflating them would grey out a perfectly runnable manual Propose.
+    out["propose"] = st(has_corpus, "analyze",
+                        "" if has_corpus else "No scored corpus yet — run Analyze first.")
     # Discovery is opt-in and never part of the core run; it has no corpus precondition.
     out["auto-search"] = st(True)
     return out
@@ -811,7 +851,10 @@ def _write_pages(platform, handles):
             remaining.remove(bare)                    # kept in place, not re-appended
         # else: the handle was removed from the watchlist — drop the line
     out.extend(remaining)                             # whatever is new goes at the end
-    pf.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
+    # Atomic: this rewrites the whole watchlist, and pages.txt is hand-curated — the one
+    # file here that a person typed and that no scrape can regenerate. A torn write would
+    # take out both the handles and the comments the block above works to preserve.
+    write_text_atomic(pf, "\n".join(out).rstrip("\n") + "\n")
 
 
 # ---------------- config (one place) ----------------
@@ -833,7 +876,10 @@ def get_config(platform):
 def put_config(platform, body: ConfigUpdate):
     d = pdir(platform)
     if body.config is not None:
-        (d / "niche_config.json").write_text(json.dumps(body.config, indent=2), encoding="utf-8")
+        # Atomic: these are the tuned weights/tiers the whole scoring engine reads. A torn
+        # file makes `analyze` fall back to defaults, which does not error — it silently
+        # re-scores the entire corpus against somebody else's numbers.
+        write_text_atomic(d / "niche_config.json", json.dumps(body.config, indent=2))
     if body.pages is not None:
         _write_pages(platform, body.pages)
     return {"ok": True}
@@ -934,7 +980,10 @@ def save_proposal(platform, body: Proposal):
     d = ROOT / "studio" / platform
     d.mkdir(parents=True, exist_ok=True)
     name = _studio_filename(body.filename)
-    (d / name).write_text(body.text, encoding="utf-8")
+    # Atomic: a re-POST overwrites an item that may already carry a human's approval in
+    # meta.json. Truncating the markdown while the gate decision survives would leave an
+    # approved proposal whose text is half gone, waiting to be rendered for real money.
+    write_text_atomic(d / name, body.text)
     meta = _read_json(_studio_meta_path(platform), {})
     now = time.time()
     prev = meta.get(name, {})
@@ -1283,7 +1332,11 @@ def save_analysis(platform, body: VideoAnalysisIn):
     rec["platform"] = platform
     rec["analyzed_at"] = time.time()
     cid = str(body.content_id).replace("/", "_")
-    (d / f"{cid}.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1), encoding="utf-8")
+    # Atomic: this document is the paid output of a multi-pass Gemini run over the clip.
+    # A torn blueprint is not recoverable by re-reading — `pending` keys on the file
+    # EXISTING, so a truncated one is "already analyzed" forever, and everything
+    # downstream (brief, corpus visual formulas) then reads a document that will not parse.
+    write_text_atomic(d / f"{cid}.json", json.dumps(rec, ensure_ascii=False, indent=1))
     # if this is a reference blueprint, flip its registry status to "analyzed"
     if body.is_reference:
         reg_path = ROOT / "references" / platform / "registry.json"
@@ -1426,10 +1479,53 @@ def _ref_registry_path(platform):
     return ROOT / "references" / platform / "registry.json"
 
 
+def _clear_partials(tmp):
+    """Delete everything sitting under a download's `.part` prefix.
+
+    A `.part` file is invisible to every glob in the repo — that is the whole point of the
+    suffix — so a leftover from a failed download would be read by nothing and cleaned up
+    by nothing. yt-dlp keeps intermediates of its own beside the name it was given, hence
+    the prefix match rather than a single unlink."""
+    tmp = Path(tmp)
+    for c in tmp.parent.glob(tmp.name + "*"):
+        try:
+            c.unlink()
+        except OSError:
+            pass
+
+
+def _claim_partial_download(tmp, dest):
+    """Promote a COMPLETED `.part` download to its real name, clearing anything left over.
+
+    Only ever called on the success path. yt-dlp names its own output and may land beside
+    the path we asked for (it remuxes), so anything under our `.part` prefix counts as the
+    download. Returns True if `dest` now holds a real file."""
+    tmp, dest = Path(tmp), Path(dest)
+    winner = None
+    for c in sorted(tmp.parent.glob(tmp.name + "*")):
+        if winner is None and c.is_file() and c.stat().st_size > 0:
+            winner = c
+        else:
+            try:
+                c.unlink()
+            except OSError:
+                pass
+    if winner is None:
+        return False
+    replace_atomic(winner, dest)
+    return dest.exists() and dest.stat().st_size > 0
+
+
 def _download_reference(url, dest):
     """Best-effort, SAFE reference-media fetch. Prefers yt-dlp if installed (no cookies,
     no login); falls back to a direct HTTP GET for direct media URLs. Never scrapes a
-    logged-in session. Returns True on success."""
+    logged-in session. Returns True on success.
+
+    Downloads to `<dest>.part` and renames only once the body is complete. `add_reference`
+    skips the fetch entirely when `dest.exists()`, so a file left at its final name by an
+    interrupted download is PERMANENT: the reference stays registered as `media_local`,
+    every retry short-circuits on the ruin, and AnalysisEngine uploads the truncated clip
+    to a paid API. `.part` cannot be mistaken for a clip by any glob in the repo."""
     # Re-validated here as well as at the endpoint: this is the function that actually
     # dereferences the URL, so it must not depend on every caller having checked first.
     try:
@@ -1439,25 +1535,31 @@ def _download_reference(url, dest):
         return False
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = part_path(dest)
     try:
         import yt_dlp  # optional; not a hard dependency
-        opts = {"outtmpl": str(dest), "quiet": True, "noplaylist": True,
+        opts = {"outtmpl": str(tmp), "quiet": True, "noplaylist": True,
                 "format": "mp4/best", "no_warnings": True}
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
-        return dest.exists()
+        return _claim_partial_download(tmp, dest)
     except ImportError:
         pass
     except Exception as e:
         log.warning("yt-dlp reference download failed", extra={"url": url, "err": str(e)})
+        # Whatever yt-dlp got to before it failed is a torn clip, not a reference. Clear it
+        # rather than promoting it: the direct-GET fallback below is about to try again,
+        # and `add_reference` would never re-fetch over a file left at the final name.
+        _clear_partials(tmp)
     # fallback: direct GET (works for direct .mp4 links; safe, no credentials)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
             f.write(r.read())
-        return dest.exists() and dest.stat().st_size > 0
+        return _claim_partial_download(tmp, dest)
     except Exception as e:
         log.warning("direct reference download failed", extra={"url": url, "err": str(e)})
+        _clear_partials(tmp)
         return False
 
 
@@ -1834,6 +1936,32 @@ def agent_secrets_status(agent):
 JOBS = {}          # job_id -> {platform, stage, status, started, ended, rc}
 _JOB_SEQ = 0
 _JOB_SEQ_LOCK = threading.Lock()
+
+_POSIX = os.name == "posix"
+
+# Live child processes, keyed by job_id, as (Popen, pgid). Deliberately NOT inside JOBS:
+# /api/events does json.dumps(JOBS, default=str) once a second and diffs the result, so a
+# Popen object here would be str()-ed into every SSE frame — a value that changes shape
+# every tick and breaks the Job contract the Dashboard types against
+# (Dashboard/src/lib/types.ts).
+#
+# The pgid is captured AT SPAWN and remembered. os.getpgid(p.pid) raises once the child has
+# been reaped, and the escalator below needs the group id precisely at the moment the child
+# is dying — which is when getpgid is least likely to still work.
+_PROCS: dict = {}
+# job_ids a human asked us to end. A separate marker, not the `status` field: the stop route
+# runs on the request thread, and _run_job would overwrite a status written from there
+# microseconds later. And not the rc either — the crash path already uses -1 and SIGTERM
+# produces -15, so no return code can tell a deliberate stop from a crash.
+_STOP_REQUESTED: set = set()
+_PROCS_LOCK = threading.Lock()
+# TERM, then this, then KILL — the same escalation ./stop already implements. Longer than
+# ./stop's 5s on purpose: the scrapers check their stop flag between creators and the
+# inter-creator delay is 10-20s, so five seconds would SIGKILL straight through the exact
+# case this button exists to make graceful (a stop between creators keeps the whole corpus
+# scraped so far, because scrape.py saves inside the per-creator loop).
+STOP_GRACE_SEC = 20.0
+
 ANALYSIS_ENGINE_DIR = ROOT.parent / "AnalysisEngine"
 AUTO_SEARCH_DIR = ROOT.parent / "AutoSearch"
 STAGE_CMD = {
@@ -1849,11 +1977,19 @@ STAGE_CMD = {
 }
 
 
-def _producer_dir(agent: str) -> Path:
+def _producer_dir(agent: str, capability: str = "renderable") -> Path:
     """Resolve a producer's sibling directory from its REGISTERED manifest, so the hub
     hardcodes no producer name or path. A renderable producer self-declares:
         {"renderable": true, "dir": "SimilarContent",
          "render_cmd": ["uv", "run", "cli.py", "render"]}
+
+    `capability` is the manifest flag the producer must have declared to be launchable for
+    THIS purpose. Rendering and proposing are different capabilities: rendering spends
+    image-API credits per frame, proposing reads the corpus and writes markdown and costs
+    nothing. A producer that only writes markdown must not have to claim it can spend
+    image credits in order to be reachable — and a producer that can render must not be
+    silently treated as one that can propose. One directory validator, called with the
+    capability in question, so the containment rule below cannot drift between the two.
     The declared dir is validated to be a direct sibling of this repo — an agent cannot
     talk the hub into executing something elsewhere on the filesystem.
 
@@ -1868,8 +2004,8 @@ def _producer_dir(agent: str) -> Path:
     do not expose it. But an open browser tab is inside that perimeter, which is why CORS
     is restricted to loopback origins and why the argv is allowlisted rather than trusted."""
     m = _read_json(PRODUCERS_FILE, {}).get(agent) or {}
-    if not m.get("renderable"):
-        raise HTTPException(400, f"producer {agent!r} does not declare renderable:true")
+    if not m.get(capability):
+        raise HTTPException(400, f"producer {agent!r} does not declare {capability}:true")
     rel = str(m.get("dir") or "").strip()
     if not rel or "/" in rel or "\\" in rel or rel.startswith("."):
         raise HTTPException(400, f"producer {agent!r} declared an illegal dir {rel!r}")
@@ -1922,6 +2058,58 @@ def _render_stage_cmd(platform, agent="similar-content"):
 # calls a paid image API, so it only ever runs when a human explicitly asks for it.
 STAGE_CMD["render"] = _render_stage_cmd
 
+
+def _propose_agent() -> str:
+    """Which registered producer proposes?
+
+    Resolved from the registry, never hardcoded — the same rule `render_studio_item`
+    follows ("the hub names no agent"). Zero or several is REFUSED rather than guessed: the
+    cascade fires this unattended, and an unattended trigger that picks an agent at random
+    is not a feature."""
+    reg = _read_json(PRODUCERS_FILE, {})
+    if not isinstance(reg, dict):
+        reg = {}
+    names = sorted(n for n, m in reg.items()
+                   if isinstance(m, dict) and m.get("proposes"))
+    if not names:
+        raise HTTPException(409, "no registered producer declares proposes:true — "
+                                 "start the producer agent once so it registers itself")
+    if len(names) > 1:
+        raise HTTPException(409, "several producers declare proposes:true "
+                                 f"({', '.join(names)}) — the hub will not guess which one "
+                                 "to run unattended")
+    return names[0]
+
+
+def _propose_stage_cmd(platform, agent=None):
+    """The free counterpart to `_render_stage_cmd`: same sibling-dir rule, same argv
+    allowlist, same unauthenticated manifest as its only input.
+
+    The SUBCOMMAND is appended HERE rather than taken from the manifest, and that is the
+    whole security argument for this stage. `_validate_render_cmd` is command-agnostic by
+    design — it checks argv SHAPE, not semantics — so a producer allowed to name its own
+    subcommand could declare ["uv", "run", "cli.py", "render"] and reach a PAID command
+    through the free, unattended trigger this feature promises costs nothing.
+    `POST /api/producers/register` needs no auth, so "free by construction" has to mean
+    construction, not the producer's honesty."""
+    agent = agent or _propose_agent()
+    m = _read_json(PRODUCERS_FILE, {}).get(agent) or {}
+    argv = [str(x) for x in (m.get("propose_cmd") or ["uv", "run", "cli.py"])]
+    if argv and argv[-1] == "propose":
+        argv = argv[:-1]                        # tolerate a manifest that spells it out
+    argv = _validate_render_cmd(agent, argv)    # reused VERBATIM so it cannot drift
+    return (argv + ["propose", "--platform", platform],
+            _producer_dir(agent, capability="proposes"))
+
+
+# `propose` reads blueprints and the scored corpus and writes markdown into the human gate.
+# Unlike its neighbour above it spends nothing, which is why the cascade may fire it and may
+# never fire `render`. Still deliberately OUT of RUN_ALL_STAGES and SCHEDULED_STAGES_FREE:
+# `cmd_propose` returns 1 when any single item failed and 2 on ProposeError, and the run-all
+# supervisor halts the whole run on any non-zero rc — so a thin corpus would break the
+# "Run full pipeline" button. Fired standalone, a non-zero rc costs one amber log line.
+STAGE_CMD["propose"] = _propose_stage_cmd
+
 def _stage_env():
     """Environment for a spawned stage.
 
@@ -1959,16 +2147,61 @@ def _job_tail(stdout, stderr) -> str:
 
 
 def _run_job(job_id, cmd, cwd):
+    """Run one stage to completion on this thread, in a process the hub can still kill.
+
+    This was `subprocess.run(..., capture_output=True)`, which keeps no handle anywhere —
+    so nothing in the hub could end a running stage, and the only way to stop a scrape was
+    to kill the whole hub with ./stop and lose whatever it was mid-way through."""
     JOBS[job_id]["status"] = "running"
     log.info("job started", extra={"job_id": job_id, "cmd": " ".join(cmd)})
+    p = None
     try:
-        r = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True,
-                           env=_stage_env())
-        JOBS[job_id]["rc"] = r.returncode
-        JOBS[job_id]["status"] = "done" if r.returncode == 0 else "error"
-        JOBS[job_id]["tail"] = _job_tail(r.stdout, r.stderr)
-        log.info("job finished", extra={"job_id": job_id, "rc": r.returncode, "status": JOBS[job_id]["status"]})
+        with _PROCS_LOCK:
+            if job_id in _STOP_REQUESTED:
+                # Stopped while still `queued`: the thread was spawned but the process was
+                # not. Starting it just so we can signal it is a race we do not have to win.
+                out, err, rc = "", "stopped before the process started", -15
+            else:
+                # start_new_session puts the stage in its OWN PROCESS GROUP. Several stages
+                # shell out via `uv run`, so the direct child is a WRAPPER and the real work
+                # is its grandchild: TERM-ing only the wrapper left the worker running AND
+                # left it holding the pipe write end, so communicate() below would never see
+                # EOF and this thread would leak with the job pinned at "running" forever.
+                # ./stop learned the same lesson (scripts/_common.sh matches by working
+                # directory, not by argv).
+                #
+                # Accepted side effect: this also detaches stages from the hub's controlling
+                # terminal, so Ctrl-C on the hub no longer cascades into them. ./stop still
+                # finds them, because it matches on the working directory.
+                p = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True, env=_stage_env(),
+                                     start_new_session=_POSIX)
+                _PROCS[job_id] = (p, os.getpgid(p.pid) if _POSIX else None)
+        if p is not None:
+            # communicate(), never wait() then read(): it drains BOTH pipes concurrently.
+            # subprocess.run's capture_output=True was doing exactly this internally, and
+            # that concurrency is the only thing preventing deadlock — scrape.py logs a line
+            # per creator and fills a 64 KiB pipe buffer long before it exits.
+            out, err = p.communicate()
+            rc = p.returncode
+        with _PROCS_LOCK:
+            _PROCS.pop(job_id, None)
+            asked_to_stop = job_id in _STOP_REQUESTED
+            _STOP_REQUESTED.discard(job_id)
+            JOBS[job_id]["rc"] = rc
+            JOBS[job_id]["tail"] = _job_tail(out, err)
+            # The marker wins over the rc, deliberately. A cooperative stop exits 0 (the
+            # corpus was saved cleanly) and a signalled one exits -15; neither number can
+            # tell a stop from a crash, and the operator has to see that their button worked
+            # rather than a red node claiming their own decision was a failure.
+            JOBS[job_id]["status"] = ("stopped" if asked_to_stop
+                                      else "done" if rc == 0 else "error")
+        log.info("job finished", extra={"job_id": job_id, "rc": rc,
+                                        "status": JOBS[job_id]["status"]})
     except Exception as e:
+        with _PROCS_LOCK:
+            _PROCS.pop(job_id, None)
+            _STOP_REQUESTED.discard(job_id)
         JOBS[job_id]["status"] = "error"
         # NOT None. `_run_stage_blocking` returns this rc, and the run-all supervisor reads
         # None as "unknown stage, skip cleanly" — so a stage that crashed outright used to
@@ -1977,23 +2210,118 @@ def _run_job(job_id, cmd, cwd):
         JOBS[job_id]["tail"] = str(e)
         log.error("job crashed", extra={"job_id": job_id, "err": str(e)})
     JOBS[job_id]["ended"] = time.time()
-    # Surface a failed pipeline stage on the central activity log so it shows up in the
-    # Dashboard's Activity view (and streams over the SSE `log` channel). Pipeline stages
-    # are not registered agents and have no board of their own, so without this a stage that
-    # dies — e.g. scrape with no handles in pages.txt — fails completely silently. The error
-    # tail is already on JOBS[...].tail for the point-of-action UI; this makes the SAME tail
-    # visible in the one place users go looking for "what happened".
-    if JOBS[job_id]["status"] == "error":
-        j = JOBS[job_id]
-        stage = j.get("stage", "pipeline")
+    _record_job_outcome(job_id)
+
+
+def _record_job_outcome(job_id):
+    """Put a terminal job on the central activity log so it shows up in the Dashboard's
+    Activity view (and streams over the SSE `log` channel). Pipeline stages are not
+    registered agents and have no board of their own, so without this a stage that dies —
+    e.g. scrape with no handles in pages.txt — fails completely silently. The tail is
+    already on JOBS[...].tail for the point-of-action UI; this makes the SAME tail visible
+    in the one place users go looking for "what happened"."""
+    j = JOBS.get(job_id) or {}
+    status = j.get("status")
+    stage = j.get("stage", "pipeline")
+    if status == "error":
         rec = {"ts": j.get("ended") or time.time(), "agent": "pipeline", "level": "error",
                "event": "job_failed", "msg": f"{stage} failed (rc {j.get('rc')})",
                "platform": j.get("platform"), "run_id": job_id,
                "data": {"stage": stage, "rc": j.get("rc"), "tail": j.get("tail", "")}}
+    elif status == "stopped":
+        # A DISTINCT event, never job_failed. A stop is a normal outcome a person chose:
+        # the scrapers save after every creator, so everything already scraped is kept.
+        # Reusing job_failed would paint that decision red on the Floor Log and would break
+        # the promise that a non-failure emits no failure record.
+        rec = {"ts": j.get("ended") or time.time(), "agent": "pipeline", "level": "warn",
+               "event": "job_stopped",
+               "msg": f"{stage} stopped by request — everything already saved is kept",
+               "platform": j.get("platform"),
+               # the run-all id when this stage belonged to one, so this record and
+               # run_stopped group together under GET /api/logs?run_id=
+               "run_id": j.get("run_id") or job_id,
+               "data": {"stage": stage, "rc": j.get("rc"), "job_id": job_id,
+                        "tail": j.get("tail", "")}}
+    else:
+        return
+    try:
+        _append_jsonl(LOGS_FILE, rec); _push_log(rec)
+    except Exception:
+        log.exception("failed to record job outcome to activity log")
+
+
+def _signal_group(job_id, sig) -> bool:
+    """TERM/KILL the child's whole process GROUP, not just the pid we spawned.
+
+    `uv run` execs a wrapper whose grandchild does the actual work AND holds the pipe write
+    end open; signalling only p.pid leaves the worker alive and leaves _run_job blocked in
+    communicate() forever, with the job pinned at "running" and (for a run-all) the platform
+    claim never released.
+
+    Returns False when there is nothing left to signal — a job that finished between the
+    lookup and the syscall is not an error, it is the ordinary race with a fast stage."""
+    with _PROCS_LOCK:
+        entry = _PROCS.get(job_id)
+    if not entry:
+        return False
+    p, pgid = entry
+    if p.poll() is not None:
+        return False
+    try:
+        if pgid is not None:
+            os.killpg(pgid, sig)
+        elif sig == signal.SIGTERM:
+            # No process groups (non-POSIX): the best we can do is the child itself, and a
+            # `uv run` grandchild may survive. Compared against SIGTERM rather than SIGKILL
+            # because SIGKILL does not exist on every platform this import has to load on.
+            p.terminate()
+        else:
+            p.kill()
+        return True
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+
+
+def _escalate_stop(job_id):
+    """Daemon body: TERM has already been sent; if the group is still alive after
+    STOP_GRACE_SEC, KILL it.
+
+    A stage that ignores TERM — or a `uv` wrapper that fails to forward it — must not leave
+    the hub holding an un-killable job at "running" forever. This lives on the stop route's
+    own thread rather than in _run_job because that thread is blocked in communicate() and
+    has no idea when (or whether) TERM was sent."""
+    deadline = time.time() + STOP_GRACE_SEC
+    while time.time() < deadline:
+        with _PROCS_LOCK:
+            if job_id not in _PROCS:
+                return                      # it took the hint and exited
+        time.sleep(0.25)
+    if _signal_group(job_id, signal.SIGKILL):
+        log.warning("stop escalated to SIGKILL", extra={"job_id": job_id})
+
+
+def _latest_active_job(platform, stage):
+    """The newest queued|running job for a stage, ordered by the trailing `:seq` — the same
+    ordering the Dashboard uses to pick which job a board node is showing.
+
+    Iterates a list() snapshot: JOBS is mutated from job threads, and iterating it live
+    raises "dictionary changed size during iteration" at exactly the busy moment a stop is
+    most likely to be pressed."""
+    best, best_seq = None, -1.0
+    for job_id, j in list(JOBS.items()):
+        if j.get("platform") != platform or j.get("stage") != stage:
+            continue
+        if j.get("status") not in ("queued", "running"):
+            continue
         try:
-            _append_jsonl(LOGS_FILE, rec); _push_log(rec)
-        except Exception:
-            log.exception("failed to record job failure to activity log")
+            seq = float(str(job_id).rsplit(":", 1)[-1])
+        except (TypeError, ValueError):
+            # per-ITEM job keys (e.g. "{platform}:render:{file}") have no numeric seq; fall
+            # back to start time so they still order sensibly against each other.
+            seq = float(j.get("started") or 0)
+        if seq >= best_seq:
+            best, best_seq = job_id, seq
+    return best
 
 
 def _launch_stage_job(platform, stage, cmd_kwargs=None, extra_args=None,
@@ -2056,16 +2384,39 @@ def _run_stage_blocking(platform, stage, run_id=None):
 # the same files — two scrapes writing one reels_raw.json, an analyze reading it mid-write.
 _RUNNING_ALL: set = set()
 _RUNNING_ALL_LOCK = threading.Lock()
+# run-all ids whose current stage a human stopped. Guarded by _RUNNING_ALL_LOCK — same
+# lifetime, same owner, no third lock to get out of order with the other two.
+_STOPPED_RUNS: set = set()
 
 
 def _run_all_supervisor(platform, run_id, stages):
     """Supervising daemon thread body: run the core stages IN SEQUENCE, waiting for each to
     finish before starting the next. Unknown stage keys are skipped cleanly. If any stage
-    exits non-zero, STOP — later stages are not run and the run is marked failed."""
+    exits non-zero, STOP — later stages are not run and the run is marked failed. If a human
+    STOPS a stage, stop too: a button labelled "Stop" that then goes on to launch
+    analysis-engine — a paid stage — is a trap, and no reading of "stop" authorises spending
+    money. The stage's own output is already saved, so Analyze's Run button is live the
+    instant the stop lands."""
     log.info("run-all started", extra={"run_id": run_id, "platform": platform, "stages": stages})
     try:
         for stage in stages:
             rc = _run_stage_blocking(platform, stage, run_id=run_id)
+            with _RUNNING_ALL_LOCK:
+                was_stopped = run_id in _STOPPED_RUNS
+            # Checked BEFORE both rc branches, deliberately: a signalled child returns -15,
+            # which the halt path below would have written to the activity log as "Full
+            # pipeline failed at scrape (rc -15)" — a crash report for something the
+            # operator chose to do. Classify by the explicit marker, never by the rc: the
+            # crash path already uses -1 and both are negative.
+            #
+            # And halt by RETURNING, never by killing this thread: the `finally` below is
+            # the only place _RUNNING_ALL is released, and skipping it leaves the platform
+            # permanently un-runnable until a hub restart.
+            if was_stopped:
+                log.info("run-all stopped by request",
+                         extra={"run_id": run_id, "stage": stage})
+                _record_run_stopped(platform, run_id, stage, stages)
+                return
             if rc is None:
                 log.warning("run-all skipping unknown stage",
                             extra={"run_id": run_id, "stage": stage})
@@ -2082,19 +2433,42 @@ def _run_all_supervisor(platform, run_id, stages):
     finally:
         with _RUNNING_ALL_LOCK:
             _RUNNING_ALL.discard(platform)
+            # Never let a stop marker outlive its run: a later run reusing this id (or a
+            # stop that landed just as the run ended) would otherwise halt on its very first
+            # stage for no reason a user could see.
+            _STOPPED_RUNS.discard(run_id)
 
 
 def _record_run_all_halt(platform, run_id, stage, rc, stages):
     remaining = stages[stages.index(stage) + 1:] if stage in stages else []
     skipped = f" — {', '.join(remaining)} not run" if remaining else ""
+    # "failed at", not "stopped at": now that a human can stop a run, "stopped" has to mean
+    # a person did it, or the Floor Log tells two different stories with the same word.
     rec = {"ts": time.time(), "agent": "pipeline", "level": "error", "event": "run_halted",
-           "msg": f"Full pipeline stopped at {stage} (rc {rc}){skipped}",
+           "msg": f"Full pipeline failed at {stage} (rc {rc}){skipped}",
            "platform": platform, "run_id": run_id,
            "data": {"stage": stage, "rc": rc, "skipped": remaining}}
     try:
         _append_jsonl(LOGS_FILE, rec); _push_log(rec)
     except Exception:
         log.exception("failed to record run-all halt to activity log")
+
+
+def _record_run_stopped(platform, run_id, stage, stages):
+    """The run-all counterpart of job_stopped: says the RUN ended, where, and what never
+    ran. Without the skipped list the Activity view shows one amber stage and then silence,
+    which reads identically to a run still in progress — the same failure _record_run_all_halt
+    was written to prevent."""
+    remaining = stages[stages.index(stage) + 1:] if stage in stages else []
+    skipped = f" — {', '.join(remaining)} not run" if remaining else ""
+    rec = {"ts": time.time(), "agent": "pipeline", "level": "warn", "event": "run_stopped",
+           "msg": f"Full pipeline stopped at {stage} by request{skipped}",
+           "platform": platform, "run_id": run_id,
+           "data": {"stage": stage, "skipped": remaining}}
+    try:
+        _append_jsonl(LOGS_FILE, rec); _push_log(rec)
+    except Exception:
+        log.exception("failed to record run-all stop to activity log")
 
 
 @app.post("/api/pipeline/{platform}/run-all")
@@ -2119,6 +2493,17 @@ def _start_run_all(platform, stages, trigger="manual"):
             raise HTTPException(409, f"a full pipeline run is already in progress for {platform}")
         _RUNNING_ALL.add(platform)
     try:
+        # ...and no run over a platform a LONE stage already owns. The claim above only
+        # knows about other run-alls, so the yielding used to be one-way: the cascade stands
+        # down for any queued/running job, but a timer run would march straight over one —
+        # scrape rewriting reels_raw.json while a cascade-fired analyze was still writing
+        # content.json and content.db. That is the same two-writers-one-corpus hazard
+        # _RUNNING_ALL exists to prevent, and the cascade makes the first launch unattended.
+        # Inside the try, so the except below releases the claim. _schedule_tick already
+        # treats a 409 from here as expected.
+        busy = _active_job_on(platform)
+        if busy:
+            raise HTTPException(409, f"a stage is already running for {platform} — {busy}")
         # Refuse a run that cannot get past its first stage, with the reason the stage
         # itself would have given — rather than spawning it to fail four seconds later.
         ready = stage_readiness(platform).get(stages[0], {})
@@ -2135,6 +2520,61 @@ def _start_run_all(platform, stages, trigger="manual"):
     log.info("run-all launched", extra={"platform": platform, "run_id": run_id,
                                         "stages": list(stages), "trigger": trigger})
     return run_id
+
+
+@app.post("/api/pipeline/{platform}/{stage}/stop", status_code=202)
+def stop_stage(platform, stage):
+    """End a running stage on purpose, keeping everything it has already saved.
+
+    This is a NORMAL outcome, not a failure: the scrapers save after every creator
+    (save_outputs + profiles_meta inside the per-creator loop), so a stop between creators
+    keeps the whole corpus scraped so far — which is the entire reason the button exists.
+
+    Registered ABOVE the /{platform}/{stage} catch-all. Three path segments cannot literally
+    be swallowed by a two-parameter route, but registration order is this file's rule — it
+    is what /run-all had to learn the hard way — and it costs nothing to keep."""
+    if platform not in PLATFORMS:
+        raise HTTPException(404, f"unknown platform {platform}")
+    if stage == "render":
+        # Render jobs are keyed per item and write frames as they go; there is no
+        # save-point to stop at, so a cancelled render leaves partial frames behind. The
+        # Dashboard already tells the user a running render can't be cancelled — this is
+        # what keeps that sentence true.
+        raise HTTPException(400, "a render cannot be stopped — render jobs are keyed per "
+                                 "item, and a half-rendered item leaves partial frames "
+                                 "behind")
+    if stage not in STAGE_CMD:
+        raise HTTPException(400, f"stage must be one of {list(STAGE_CMD)}")
+    job_id = _latest_active_job(platform, stage)
+    if not job_id:
+        # 409, not 404 and not a silent no-op: the stage exists, the state is wrong, and
+        # "stop refused because the job already finished" is exactly the sentence the
+        # operator needs to see instead of a button that appears to do nothing.
+        raise HTTPException(409, f"nothing to stop — {stage} is not running on {platform}")
+    # The marker goes down FIRST, before any signal. That ordering is the whole correctness
+    # argument: the marker is added strictly before the signal, communicate() returns
+    # strictly after the signal takes effect, so the marker is always visible by the time
+    # _run_job decides what to write as the status.
+    with _PROCS_LOCK:
+        _STOP_REQUESTED.add(job_id)
+    # `run_id` is present only on stages launched by the run-all supervisor
+    # (_launch_stage_job never sets one), so it is the exact discriminator for "this stage
+    # belongs to a full pipeline run" — and therefore for "halt the rest of that run".
+    run_id = (JOBS.get(job_id) or {}).get("run_id")
+    if run_id:
+        with _RUNNING_ALL_LOCK:
+            _STOPPED_RUNS.add(run_id)
+    signalled = _signal_group(job_id, signal.SIGTERM)
+    if signalled:
+        threading.Thread(target=_escalate_stop, args=(job_id,), daemon=True).start()
+    # A job with no process handle (still `queued`, or _run_job replaced wholesale in a
+    # test) is not an error: the marker still labels the outcome honestly, and _run_job
+    # will see it before it spawns anything. Never a KeyError, whatever the state.
+    log.info("stop requested", extra={"job_id": job_id, "platform": platform,
+                                      "stage": stage, "signalled": signalled,
+                                      "run_id": run_id})
+    return {"job_id": job_id, "stage": stage, "platform": platform,
+            "signalled": signalled, "halting_run": run_id}
 
 
 # ---- the catch-all, LAST ------------------------------------------------------------
@@ -2172,6 +2612,16 @@ def run_stage(platform, stage, force: bool = False):
 # The hub has to be running for any of this to fire — there is no daemon outside it, by
 # design (everything is local-first, $0, no cron dependency). A schedule is therefore a
 # best-effort "while you have this open", not a guarantee, and the UI says so.
+def _strict_bool(value, default):
+    """Only a REAL boolean is an answer here; everything else falls back to the default,
+    which is off. `bool("false")` is True, and `"false"` is exactly what a jq edit, a
+    YAML->JSON conversion or a hand edit produces — so the plain coercion had a config file
+    that literally reads `false` turning the paid boundary ON. This file's whole threat
+    model is "hand-edited", and these two flags are the only gates on the only paid
+    stage."""
+    return value if isinstance(value, bool) else default
+
+
 def _schedule_file():
     """Resolved per call, not bound at import: ROOT is repointed at a tmp dir by the test
     fixture (and could be by any embedder), and a module-level constant would keep writing
@@ -2205,8 +2655,12 @@ def _read_schedule():
             merged["every_hours"] = max(1.0, float(merged["every_hours"] or 24))
         except (TypeError, ValueError):
             merged["every_hours"] = 24.0
-        merged["enabled"] = bool(merged["enabled"])
-        merged["include_blueprints"] = bool(merged["include_blueprints"])
+        # Only a real boolean is an answer: bool("false") is True, and "false" is exactly
+        # what a jq edit or a hand edit of this file produces. `include_blueprints` is the
+        # gate on the one paid stage the scheduler can reach.
+        merged["enabled"] = _strict_bool(merged["enabled"], SCHEDULE_DEFAULTS["enabled"])
+        merged["include_blueprints"] = _strict_bool(
+            merged["include_blueprints"], SCHEDULE_DEFAULTS["include_blueprints"])
         try:
             merged["last_run_at"] = float(merged.get("last_run_at") or 0)
         except (TypeError, ValueError):
@@ -2216,9 +2670,10 @@ def _read_schedule():
 
 
 def _write_schedule(sched):
-    f = _schedule_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(sched, indent=2), encoding="utf-8")
+    # Atomic, like every other config the hub owns: `_read_schedule` fails CLOSED, so a
+    # torn write here would not error — it would silently switch every platform's automatic
+    # runs off, and the only symptom would be that nothing ever ran again.
+    write_text_atomic(_schedule_file(), json.dumps(sched, indent=2))
 
 
 def scheduled_stages(row):
@@ -2305,6 +2760,479 @@ def _schedule_loop():
         except Exception as e:
             log.error("schedule loop error (staying idle)", extra={"err": str(e)})
         time.sleep(300 * (1.0 + random.uniform(-0.1, 0.1)))
+
+
+# ---------------- the cascading heartbeat ----------------
+# The scheduler above answers "when should a whole run happen?" with a clock. This answers a
+# different question — "how much new work has landed?" — with a counter, and moves the
+# pipeline one boundary at a time:
+#
+#     analyze        every N new raw reels scraped
+#     media          every N new scored corpus rows
+#     analysis-engine every N new persisted clips        (PAID — opt-in per platform)
+#     propose        every N new blueprints, publishing `propose_count` recipes
+#
+# ...and then it STOPS, at the human gate. Nothing after `propose` is automatic.
+def _cascade_file():
+    """Resolved per call, not bound at import — same reason as `_schedule_file`: the test
+    fixture repoints ROOT, and a module-level constant kept writing the developer's real
+    config until a test caught it."""
+    return ROOT / "config" / "pipeline_cascade.json"
+
+
+# The ONLY stages the cascade can launch, in pipeline order. `render` spends image-API
+# credits per frame, so it is not in this list, there is no config field anywhere that names
+# a stage, and `steps`/`marks` keys outside this list are dropped on read. That is three
+# independent reasons why no configuration — hand-edited, migrated from an older build, or
+# POSTed by anything that can reach the port — can make this feature spend money on images.
+CASCADE_STAGES = ["analyze", "media", "analysis-engine", "propose"]
+assert "render" not in CASCADE_STAGES
+
+CASCADE_DEFAULTS = {
+    "enabled": False,
+    "include_blueprints": False,
+    # Keyed by the stage that FIRES, so the keys are CASCADE_STAGES and cannot drift.
+    # 40 -> 40 -> 40 -> 40-then-3 is "for every 40 reels analyzed, the script should be
+    # analyzed and three proposals should be there", literally. The first three boundaries
+    # are ~1:1 transforms (a reel becomes a row becomes a clip becomes a blueprint) so there
+    # is nothing to taper; the funnel narrows at the one many-to-few boundary, and then 3->1
+    # at the human gate, which is why the gate has no integer.
+    "steps": {"analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40},
+    "propose_count": 3,
+    # The high-water marks: how much input each boundary has already consumed. Machine-owned
+    # — accepted-but-ignored on PUT.
+    "marks": {s: 0 for s in CASCADE_STAGES},
+}
+# What is persisted, in order. Everything else `_read_cascade` returns is derived and must
+# not be written back (`problem` especially — it is a symptom, not a setting).
+CASCADE_PERSISTED = ("enabled", "include_blueprints", "steps", "propose_count", "marks")
+PROPOSE_COUNT_MAX = 25        # mirrors the `top_n` schema the producer registers
+_CASCADE_LOCK = threading.Lock()
+
+
+def _cascade_ints(src, defaults, floor):
+    """Coerce a {stage: int} map, key by key, dropping every key that is not a cascade
+    stage. Dropping rather than honouring is what makes `{"steps": {"render": 1}}` a
+    no-op instead of an instruction.
+
+    The except is deliberately BARE: the fallback is the default either way, and a narrower
+    one (TypeError, ValueError) let `1e400` through — json.loads maps it to float('inf'),
+    and int(inf) raises OverflowError, which is an ArithmeticError. That escaped the
+    fail-closed read and 500-ed GET/PUT /api/cascade, leaving the operator unable to see or
+    switch off the very platform that was broken."""
+    src = src if isinstance(src, dict) else {}
+    out = {}
+    for s in CASCADE_STAGES:
+        try:
+            out[s] = max(floor, int(src.get(s, defaults[s])))
+        except Exception:
+            out[s] = defaults[s]
+    return out
+
+
+def _cascade_funnel_problem(steps, propose_count):
+    """Is this configuration one where a later stage could fire MORE often than the stage
+    feeding it? Returns the sentence to show a human, or None.
+
+    A stage fires roughly total_input/step times, and each stage's input is at most its
+    predecessor's (not every reel gets media, not every clip gets a blueprint) — so `steps`
+    being non-decreasing along CASCADE_STAGES is a sufficient, checkable condition for
+    "downstream never outruns upstream". Plus propose_count <= steps["propose"], because
+    publishing 3 recipes per 1 new blueprint widens the funnel at the last boundary."""
+    for prev, nxt in zip(CASCADE_STAGES, CASCADE_STAGES[1:]):
+        if steps[nxt] < steps[prev]:
+            return (f"{nxt} must not fire more often than {prev} — give steps.{nxt} at "
+                    f"least {steps[prev]} (the {prev} step), or lower steps.{prev}.")
+    if propose_count > steps["propose"]:
+        return (f"propose_count must not exceed steps.propose — give steps.propose at "
+                f"least {propose_count}, or lower propose_count to {steps['propose']}.")
+    return None
+
+
+def _read_cascade():
+    """Fail-closed read of the whole cascade map. ANY problem resolves to disabled — an
+    unattended trigger must never turn itself on because a file was unreadable — and a row
+    for EVERY platform is always returned, so callers never branch on absence.
+
+    A funnel-widening configuration records `problem`, and `problem` REFUSES TO RUN wherever
+    the row is consumed (`_cascade_active` below). The rule is "any ambiguity = the chain is
+    OFF", and a hand-edited or older-build file whose downstream stage fires more often than
+    its upstream one is ambiguity. It is not silent: GET /api/cascade surfaces `problem`, and
+    reports `enabled: false` alongside it, so the UI can say it out loud. Per-FIELD coercion
+    still clamps (max(1, int(x)), propose_count into 1..25) — that is coercion, exactly like
+    _read_schedule's max(1.0, every_hours), not ambiguity.
+
+    `enabled` here is the STORED value, not the effective one, and that distinction is load
+    bearing. It used to be forced to False on a `problem`, and every write path re-serialises
+    this row — so an unrelated platform's tick, or the very PUT that fixed the funnel, would
+    promote a transient symptom into permanent state: the platform stayed off with no
+    `problem` string left to explain why, and the operator's only clue was a toggle that
+    appeared to have flipped itself."""
+    try:
+        raw = _read_json(_cascade_file(), {})
+        if not isinstance(raw, dict):
+            raw = {}
+    except Exception as e:
+        log.warning("cascade unreadable, failing closed", extra={"err": str(e)})
+        raw = {}
+    out = {}
+    for p in PLATFORMS:
+        row = raw.get(p) if isinstance(raw.get(p), dict) else {}
+        merged = {"enabled": _strict_bool(row.get("enabled"),
+                                           CASCADE_DEFAULTS["enabled"]),
+                  "include_blueprints": _strict_bool(
+                      row.get("include_blueprints"),
+                      CASCADE_DEFAULTS["include_blueprints"]),
+                  "steps": _cascade_ints(row.get("steps"), CASCADE_DEFAULTS["steps"], 1),
+                  "marks": _cascade_ints(row.get("marks"), CASCADE_DEFAULTS["marks"], 0)}
+        try:
+            merged["propose_count"] = min(PROPOSE_COUNT_MAX, max(
+                1, int(row.get("propose_count") or CASCADE_DEFAULTS["propose_count"])))
+        except Exception:          # bare for the same reason as _cascade_ints: 1e400
+            merged["propose_count"] = CASCADE_DEFAULTS["propose_count"]
+        merged["problem"] = _cascade_funnel_problem(merged["steps"],
+                                                    merged["propose_count"])
+        out[p] = merged
+    return out
+
+
+def _cascade_active(row) -> bool:
+    """May this platform's cascade fire at all? Stored intent AND no funnel problem. Every
+    consumer asks this rather than reading `enabled`, so "refuses to run" never has to be
+    written to disk as "switched off"."""
+    return bool(row["enabled"]) and not row["problem"]
+
+
+def _write_cascade(cfg):
+    """Persist only the owned fields, MERGED into whatever else is already on disk.
+    `problem`, `counts`, `due` and `next_at` are derived on read; writing them back would
+    turn a transient symptom into a stored setting.
+
+    The merge matters as much as the filter. A whole-file rewrite from the normalised map
+    let one platform's tick silently restate every OTHER platform's row — a pure down-clamp
+    of instagram's mark rewrote x's settings — and dropped every top-level key this build
+    does not know about (a platform a newer build added, an operator's own note)."""
+    try:
+        raw = _read_json(_cascade_file(), {})
+        if not isinstance(raw, dict):
+            raw = {}
+    except Exception:
+        raw = {}
+    for p, row in cfg.items():
+        stored = raw.get(p)
+        raw[p] = {**(stored if isinstance(stored, dict) else {}),
+                  **{k: row[k] for k in CASCADE_PERSISTED}}
+    _write_json(_cascade_file(), raw)
+
+
+def _blueprint_count(platform) -> int:
+    """Blueprints on disk for a platform, excluding operator-supplied references — the same
+    exclusion `_media_count` makes, for the same reason: `ref_*` is not corpus work."""
+    d = adir(platform)
+    if not d.is_dir():
+        return 0
+    return sum(1 for f in d.glob("*.json") if not f.name.startswith("ref_"))
+
+
+def _cascade_counts(platform) -> dict:
+    """What each boundary counts, keyed by the stage that fires. One boundary, one stable
+    unit, forever: these numbers are compared against a PERSISTED watermark, so a counter
+    that changed its unit based on a setting would silently redefine every stored mark."""
+    rows = _read_json(pdir(platform) / "content.json", [])
+    return {
+        "analyze": _scraped_count(platform),
+        "media": len(rows) if isinstance(rows, list) else 0,
+        "analysis-engine": _media_count(platform),
+        "propose": _blueprint_count(platform),
+    }
+
+
+def _cascade_marks_now(platform, why):
+    """Every boundary's mark stamped to the count it can see right now — what "turning
+    something on starts its clock, it does not settle its backlog" means for a counter.
+
+    Fails CLOSED with a 409 rather than stamping zeros: a stamp we could not read is a
+    backlog that would otherwise be settled in one unattended, paid burst."""
+    try:
+        return {s: int(v) for s, v in _cascade_counts(platform).items()}
+    except Exception as e:
+        log.warning("cascade could not read counts, failing closed",
+                    extra={"platform": platform, "why": why, "err": str(e)})
+        raise HTTPException(409, f"cannot {why}: the corpus counts are unreadable right now")
+
+
+def _cascade_plan(row, counts):
+    """The most-upstream boundary that is due for one platform, and how much NEW input it
+    has. Returns (stage or None, available).
+
+    Also applies the down-clamp, in place, to every stage's mark — see below. That is the
+    only mutation; everything else here is pure, which is what makes the boundary
+    arithmetic directly unit-testable without a hub."""
+    due, available = None, 0
+    for stage in CASCADE_STAGES:
+        n = int(counts.get(stage) or 0)
+        mark = int(row["marks"].get(stage) or 0)
+        if n < mark:
+            # The corpus shrank (./clean, a re-scrape, a deleted analysis dir). A mark above
+            # the live count describes data that is gone; leaving it there keeps the stage
+            # silent until the count climbs back past a number that no longer means
+            # anything — a silent skip, which is precisely what a watermark exists to
+            # prevent. Lower it to the new floor and fire nothing: it then takes a full
+            # fresh step to come due, so this can neither double-fire nor skip.
+            row["marks"][stage] = mark = n
+        if stage == "analysis-engine" and not row["include_blueprints"]:
+            continue                      # paid; never fires unless explicitly opted into
+        if due is None and n - mark >= row["steps"][stage]:
+            due, available = stage, n - mark
+    return due, available
+
+
+def _cascade_extra_args(stage, row, available):
+    """Per-stage arguments. Only `propose` takes one: never publish more recipes than the
+    new blueprints that triggered this fire. It can only bite on a hand-edited file, and it
+    is kept for exactly that case."""
+    if stage == "propose":
+        return ["--count", str(max(1, min(int(row["propose_count"]), int(available))))]
+    return None
+
+
+def _active_job_on(platform):
+    """The id of a stage job already working this platform, or None. Snapshot with list() —
+    JOBS is mutated from job threads. Split out of `_cascade_blocked_by_a_job` because
+    `_start_run_all` needs the JOBS half WITHOUT the `_RUNNING_ALL` half: it asks the
+    question after claiming the platform, so the run-all check would always answer itself."""
+    for job_id, j in list(JOBS.items()):
+        if j.get("platform") == platform and j.get("status") in ("queued", "running"):
+            return f"{job_id} is still {j.get('status')}"
+    return None
+
+
+def _cascade_blocked_by_a_job(platform):
+    """Is anything already working on this platform? Not just the same stage: firing
+    `analyze` while a manual scrape is mid-write is the exact hazard `_RUNNING_ALL` was
+    introduced to prevent."""
+    with _RUNNING_ALL_LOCK:
+        if platform in _RUNNING_ALL:
+            return "a full pipeline run owns this platform"
+    return _active_job_on(platform)
+
+
+def _cascade_rollback(platform, stage, previous):
+    """Give a mark back when the fire it was stamped for did not happen. Without this, a
+    launch that never ran silently costs a full window of work: the mark says the input was
+    consumed and nothing ever consumed it."""
+    with _CASCADE_LOCK:
+        cfg = _read_cascade()
+        cfg[platform]["marks"][stage] = previous
+        _write_cascade(cfg)
+
+
+def _cascade_tick(now=None):
+    """One pass over every platform. Returns the (platform, stage) pairs it launched, so the
+    loop and the tests both see what happened without reading logs — the same contract
+    `_schedule_tick` has.
+
+    At most ONE boundary fires per platform per tick, and it is the most upstream due one.
+    The stages are strictly serial (each consumes output the next tick will only just have
+    seen), so this costs nothing and makes "downstream outran upstream" impossible in time,
+    not merely in arithmetic. Never raises: a tick that cannot count is a tick that does
+    nothing, not a dead daemon.
+
+    `now` is accepted and ignored, so this reads like `_schedule_tick` to a caller. Nothing
+    here is time-based — the clock IS the input count — which is also why a hub restart
+    between two ticks changes nothing at all."""
+    launched = []
+    for p in PLATFORMS:
+        try:
+            stage = previous = None
+            with _CASCADE_LOCK:
+                cfg = _read_cascade()
+                row = cfg[p]
+                if not _cascade_active(row):
+                    # Stored-off, or a funnel this build refuses to reason about. Either way
+                    # nothing fires and nothing is written — the refusal stays a report.
+                    continue
+                blocked = _cascade_blocked_by_a_job(p)
+                if blocked:
+                    # Stand down WITHOUT advancing any mark: nothing is lost, and the work
+                    # comes due again the instant the platform is free.
+                    log.info("cascade standing down", extra={"platform": p, "why": blocked})
+                    continue
+                counts = _cascade_counts(p)
+                marks_before = dict(row["marks"])
+                stage, available = _cascade_plan(row, counts)
+                dirty = row["marks"] != marks_before
+                if stage is not None:
+                    ready = stage_readiness(p).get(stage, {})
+                    if not ready.get("ready", True):
+                        # The one place this deliberately differs from the timer: the timer
+                        # advances its clock on a skip so it cannot spin, but this clock IS
+                        # the input count, which does not move on its own. Not advancing
+                        # costs nothing, cannot spin (it launched nothing), and means the
+                        # work fires the instant the block clears.
+                        log.info("cascade stage not ready", extra={
+                            "platform": p, "stage": stage, "why": ready.get("reason")})
+                        stage = None
+                if stage == "propose":
+                    # Resolve the producer BEFORE stamping. If no registered producer
+                    # declares `proposes` (or two do), the launch would raise a 409 out of
+                    # _propose_stage_cmd, and because the mark is rolled back the identical
+                    # failure would repeat on every 60s tick — 1,440 ERROR records a day,
+                    # drowning real ones. It is a not-ready condition, so it is treated as
+                    # one: no mark, no launch, one INFO line, fires the moment a producer
+                    # registers. GET /api/cascade already surfaces the same sentence as
+                    # `propose_agent_problem`.
+                    try:
+                        _propose_agent()
+                    except HTTPException as e:
+                        log.info("cascade stage has no producer", extra={
+                            "platform": p, "stage": stage, "why": e.detail})
+                        stage = None
+                if stage is not None:
+                    # Stamp BEFORE launching, to the OBSERVED count rather than forward by
+                    # one step: these stages are batch (analyze re-scores the whole corpus
+                    # every run), so a 5,000-item backlog must produce ONE fire, never a
+                    # burst of identical ones. And a stage that runs for an hour must not
+                    # come due again on the next tick.
+                    previous = row["marks"][stage]
+                    row["marks"][stage] = int(counts.get(stage) or 0)
+                    dirty = True
+                if dirty:
+                    _write_cascade(cfg)
+            # Lock released before the launch, deliberately: _launch_stage_job spawns a
+            # thread and must never run while this holds the config lock.
+            if stage is None:
+                continue
+            late = _cascade_blocked_by_a_job(p)
+            if late:
+                # The stand-down check above ran under _CASCADE_LOCK, which does not guard
+                # JOBS — and the lock is then released across a config file write. A manual
+                # run landing in that window would give two AnalysisEngine runs draining the
+                # same top-15 pending clips: the same clips analysed, and billed, twice.
+                # Re-check on the near side of the launch and give the mark back.
+                _cascade_rollback(p, stage, previous)
+                log.info("cascade standing down", extra={"platform": p, "stage": stage,
+                                                         "why": late})
+                continue
+            try:
+                job_id = _launch_stage_job(
+                    p, stage, extra_args=_cascade_extra_args(stage, row, available))
+                launched.append((p, stage))
+                log.info("cascade fired", extra={"platform": p, "stage": stage,
+                                                 "job_id": job_id, "new_input": available,
+                                                 "mark": row["marks"][stage]})
+            except Exception as e:
+                _cascade_rollback(p, stage, previous)
+                log.error("cascade launch failed", extra={"platform": p, "stage": stage,
+                                                          "err": str(e)})
+        except Exception as e:
+            log.error("cascade tick error (platform skipped)",
+                      extra={"platform": p, "err": str(e)})
+    return launched
+
+
+def _cascade_loop():
+    """Background daemon. 60s, not the scheduler's 300s: the point of a count-driven trigger
+    is that it reacts to work landing, and it walks one boundary per tick — at 300s a
+    four-boundary walk would take twenty minutes. Disabled, the cost is one small JSON read
+    a minute. Never raises into the caller."""
+    while True:
+        try:
+            _cascade_tick()
+        except Exception as e:
+            log.error("cascade loop error (staying idle)", extra={"err": str(e)})
+        time.sleep(60 * (1.0 + random.uniform(-0.1, 0.1)))
+
+
+@app.get("/api/cascade")
+def get_cascade():
+    """Per-platform cascade settings, with the boundary arithmetic already done — `counts`,
+    `due`, `next_at` — so the UI never recomputes it, the same courtesy GET /api/schedule
+    pays with `next_run_at`. `problem` is non-null when a stored configuration refuses to
+    run; the UI shows that sentence in place of the toggle state.
+
+    A row with a `problem` reports `enabled: false` and an empty `due`, because that is the
+    truth about what will happen. That answer is DERIVED here and never written back — the
+    stored intent survives, so fixing the funnel brings the platform back on rather than
+    leaving it silently off with nothing left to explain why."""
+    cfg = _read_cascade()
+    try:
+        agent = _propose_agent()
+    except HTTPException as e:
+        agent = None
+        agent_problem = e.detail
+    else:
+        agent_problem = None
+    for p, row in cfg.items():
+        try:
+            counts = _cascade_counts(p)
+        except Exception:
+            counts = {s: 0 for s in CASCADE_STAGES}
+        row["stages"] = list(CASCADE_STAGES)
+        row["counts"] = counts
+        row["due"] = [] if row["problem"] else [
+            s for s in CASCADE_STAGES
+            if (s != "analysis-engine" or row["include_blueprints"])
+            and counts.get(s, 0) - row["marks"][s] >= row["steps"][s]]
+        row["enabled"] = _cascade_active(row)
+        row["next_at"] = {s: row["marks"][s] + row["steps"][s] for s in CASCADE_STAGES}
+        row["propose_agent"] = agent
+        row["propose_agent_problem"] = agent_problem
+    return cfg
+
+
+@app.put("/api/cascade/{platform}")
+def put_cascade(platform, body: CascadeIn):
+    """Change one platform's cascade settings.
+
+    A funnel-widening configuration is REFUSED with a sentence naming both fields rather
+    than silently clamped: this is a human typing into a form, and a silent clamp means the
+    number they see afterwards is not the number they typed, so they type it again."""
+    if platform not in PLATFORMS:
+        raise HTTPException(404, f"unknown platform {platform}")
+    with _CASCADE_LOCK:
+        cfg = _read_cascade()
+        row = cfg[platform]
+        if body.steps is not None:
+            # Keys outside CASCADE_STAGES are DROPPED here too, so a PUT cannot introduce a
+            # stage the tick would then have to refuse.
+            row["steps"] = _cascade_ints(body.steps, row["steps"], 1)
+        if body.propose_count is not None:
+            row["propose_count"] = min(PROPOSE_COUNT_MAX, max(1, int(body.propose_count)))
+        problem = _cascade_funnel_problem(row["steps"], row["propose_count"])
+        if problem:
+            raise HTTPException(400, problem)
+        if body.include_blueprints is not None:
+            if body.include_blueprints and not row["include_blueprints"]:
+                # The same load-bearing stamp as `enabled` below, for the one toggle that
+                # IS the paid boundary — and it is needed MORE here, not less.
+                #
+                # While include_blueprints is false, _cascade_plan skips analysis-engine
+                # before the due check, so its mark is only ever clamped DOWN, never
+                # advanced. After a month of free cascading the mark still says 10 while
+                # media/ holds 3,000 clips. Flipping this on without restamping settles that
+                # entire backlog on the very next unattended tick: a Gemini run over clips
+                # that landed weeks ago and are not "new" by this field's own meaning. PUT
+                # is the only way to set it, so there would be no way for an operator to
+                # avoid it.
+                row["marks"]["analysis-engine"] = _cascade_marks_now(
+                    platform, "opt in to blueprints")["analysis-engine"]
+            row["include_blueprints"] = bool(body.include_blueprints)
+        if body.enabled is not None:
+            if body.enabled and not row["enabled"]:
+                # THE load-bearing line. Without it, one toggle against an already-scraped
+                # 3,000-clip corpus fires four boundaries in turn — one of them paid —
+                # before anyone sees a job appear on the Board. Same shape as put_schedule
+                # stamping last_run_at on enable: turning something on starts its clock, it
+                # does not settle its backlog.
+                row["marks"] = _cascade_marks_now(platform, "enable the cascade")
+            row["enabled"] = bool(body.enabled)
+        _write_cascade(cfg)
+    log.info("cascade updated", extra={"platform": platform,
+                                       **{k: row[k] for k in
+                                          ("enabled", "include_blueprints", "propose_count")},
+                                       "steps": row["steps"]})
+    return get_cascade()[platform]
 
 
 # ---------------- discovery heartbeat scheduler + kill-switch (PIPELINE.md §11.1/§11.2) ----------------

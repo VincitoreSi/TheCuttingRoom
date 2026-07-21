@@ -1,7 +1,7 @@
 import { useReducedMotion } from "../lib/hooks";
 import { cx } from "../lib/cx";
 
-export type SeamState = "idle" | "working" | "done" | "error";
+export type SeamState = "idle" | "working" | "done" | "error" | "stopped";
 
 /**
  * The signature agent-status motif: a needle-and-thread seam.
@@ -9,6 +9,11 @@ export type SeamState = "idle" | "working" | "done" | "error";
  *  - working : the thread marches (dashoffset loop), needle bobs — oxblood
  *  - done    : a solid sage seam finished with a knot
  *  - error   : the seam snaps in two — the hotter red
+ *  - stopped : the `done` geometry — a solid, still seam — in brass, but with NO
+ *              terminal knot: a seam cut clean and left untied. Not `error`, which
+ *              over-alarms something the operator chose to do; and never `idle`, which
+ *              means *never ran* — a scrape stopped after 200 saved reels must not
+ *              render identically to one that was never launched.
  */
 export function Seam({
   state,
@@ -30,9 +35,14 @@ export function Seam({
       ? "var(--sage)"
       : state === "error"
         ? "var(--danger)"
-        : state === "working"
-          ? "var(--oxblood)"
-          : "var(--line-strong)";
+        : state === "stopped"
+          ? "var(--brass)"
+          : state === "working"
+            ? "var(--oxblood)"
+            : "var(--line-strong)";
+  // a finished seam is solid; a cut one is solid too — it was really sewn, it just has
+  // no knot on the end. Only idle/working stay basted.
+  const solid = state === "done" || state === "stopped";
 
   return (
     <svg
@@ -80,14 +90,14 @@ export function Seam({
       ) : (
         <>
           <path
-            d={`M2 ${midY} H ${width - 14}`}
+            d={`M2 ${midY} H ${width - (state === "stopped" ? 2 : 14)}`}
             stroke={stroke}
             strokeWidth={2}
             strokeLinecap="round"
-            strokeDasharray={state === "done" ? "0" : "6 4"}
+            strokeDasharray={solid ? "0" : "6 4"}
             style={animate ? { animation: "seam-march 0.9s linear infinite" } : undefined}
           />
-          {state === "done" ? (
+          {state === "stopped" ? null : state === "done" ? (
             /* the finishing knot */
             <g stroke="var(--sage)" strokeWidth={2} fill="none">
               <circle cx={width - 12} cy={midY} r={3.2} fill="var(--sage-wash)" />
@@ -133,9 +143,11 @@ export function SeamStatus({
       ? "var(--sage-ink)"
       : state === "error"
         ? "var(--danger)"
-        : state === "working"
-          ? "var(--oxblood-ink)"
-          : "var(--ink-dim)";
+        : state === "stopped"
+          ? "var(--brass-ink)"
+          : state === "working"
+            ? "var(--oxblood-ink)"
+            : "var(--ink-dim)";
   return (
     <div className="flex items-center gap-2.5">
       <Seam state={state} width={92} flowOn={flowOn} />

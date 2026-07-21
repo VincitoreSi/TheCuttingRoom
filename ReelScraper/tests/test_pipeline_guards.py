@@ -52,7 +52,9 @@ def test_a_crashed_stage_reports_a_real_return_code(hub, monkeypatch):
     rest of the pipeline run on as if nothing had happened."""
     def boom(*a, **k):
         raise OSError("uv not found")
-    monkeypatch.setattr(hub.mod.subprocess, "run", boom)
+    # Popen, not run: _run_job now keeps a handle on its child so a stage can be stopped.
+    # The behaviour under test is unchanged — this only names the spawn call it fakes.
+    monkeypatch.setattr(hub.mod.subprocess, "Popen", boom)
     hub.mod.JOBS["instagram:scrape:99"] = {"platform": "instagram", "stage": "scrape",
                                            "status": "queued", "started": 0, "ended": None,
                                            "rc": None, "tail": ""}
@@ -133,6 +135,43 @@ def test_a_second_run_all_is_refused_while_one_is_in_flight(hub, monkeypatch):
 
     assert second.status_code == 409
     assert "already in progress" in second.json()["detail"]
+
+
+def test_a_run_all_is_refused_while_a_lone_stage_owns_the_platform(hub, monkeypatch):
+    """The in-flight claim only knows about other run-alls, so the yielding was one-way: the
+    cascade stands down for any queued/running job, but a timer run marched straight over
+    one — scrape rewriting reels_raw.json while a cascade-fired analyze was still writing
+    content.json and content.db. Same two-writers-one-corpus hazard the claim exists to
+    prevent; the cascade just made the first launch unattended."""
+    _pages(hub, "example_one")
+    hub.mod.JOBS["instagram:analyze:1"] = {"platform": "instagram", "stage": "analyze",
+                                           "status": "running", "started": 0, "ended": None,
+                                           "rc": None, "tail": ""}
+    try:
+        r = hub.post("/api/pipeline/instagram/run-all")
+
+        assert r.status_code == 409
+        assert "already running" in r.json()["detail"]
+        assert hub.mod._RUNNING_ALL == set()      # and the claim is released, not wedged
+    finally:
+        hub.mod.JOBS.pop("instagram:analyze:1", None)
+
+
+def test_a_finished_stage_does_not_block_the_next_run(hub, monkeypatch):
+    """The guard keys on queued|running only — a terminal job must never wedge a platform
+    until the hub restarts."""
+    _pages(hub, "example_one")
+    monkeypatch.setattr(hub.mod.threading, "Thread",
+                        lambda *a, **k: type("T", (), {"start": lambda s: None,
+                                                       "daemon": True})())
+    hub.mod.JOBS["instagram:analyze:1"] = {"platform": "instagram", "stage": "analyze",
+                                           "status": "done", "started": 0, "ended": 1,
+                                           "rc": 0, "tail": ""}
+    try:
+        assert hub.post("/api/pipeline/instagram/run-all").status_code == 200
+    finally:
+        hub.mod.JOBS.pop("instagram:analyze:1", None)
+        hub.mod._RUNNING_ALL.discard("instagram")
 
 
 def test_a_refused_run_all_does_not_wedge_the_in_flight_flag(hub):

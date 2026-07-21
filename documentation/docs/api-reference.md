@@ -452,12 +452,31 @@ Stage jobs are launched generically and tracked as background subprocesses; the 
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/pipeline/{platform}/{stage}` | Launch a single stage subprocess job. `stage` ∈ `scrape`, `analyze`, `media`, `analysis-engine`, `auto-search`, `auto-search-beat`, `render`. Returns `{job_id}`. **409** with the reason when the stage's input is not ready (see `readiness` above); `?force=true` overrides — readiness is a convenience, not a security boundary. |
+| `POST /api/pipeline/{platform}/{stage}` | Launch a single stage subprocess job. `stage` ∈ `scrape`, `analyze`, `media`, `analysis-engine`, `propose`, `auto-search`, `auto-search-beat`, `render`. Returns `{job_id}`. **409** with the reason when the stage's input is not ready (see `readiness` above); `?force=true` overrides — readiness is a convenience, not a security boundary. |
+| `POST /api/pipeline/{platform}/{stage}/stop` | End a running stage on purpose, keeping everything it has already saved. **202** — see [Stopping a stage](#stopping-a-stage). |
 | `POST /api/pipeline/{platform}/run-all` | Launch the one-click core pipeline: the stages in `RUN_ALL_STAGES` (`scrape → analyze → media → analysis-engine`) chained in order. **`render` is deliberately excluded** — it spends model credits and only runs on an explicit per-item human trigger. Returns `{run_id, stages}`; every stage job of the run carries that `run_id`. **409** if a run is already in flight for the platform, or if the first stage cannot run. |
-| `GET /api/pipeline/status` | Snapshot of all jobs (queued/running/done/error, return code, output tail, `run_id`). |
+| `GET /api/pipeline/status` | Snapshot of all jobs (queued/running/done/error/stopped, return code, output tail, `run_id`). |
 | `GET /api/schedule` | Per-platform automatic-run settings, plus the derived `stages` and `next_run_at`. |
 | `PUT /api/schedule/{platform}` | `{enabled?, every_hours?, include_blueprints?}` — every field optional. |
+| `GET /api/cascade` | Per-platform cascading-heartbeat settings, with the boundary arithmetic already done — see [The cascade](#the-cascade). |
+| `PUT /api/cascade/{platform}` | `{enabled?, include_blueprints?, steps?, propose_count?}` — every field optional. |
 | `GET /api/events` | SSE stream — see below. |
+
+### Job status vocabulary
+
+A job entry carries one of **five** statuses. The first four are unchanged; `stopped` is new.
+
+| `status` | Meaning |
+|---|---|
+| `queued` | The worker thread exists; the subprocess has not been spawned yet. |
+| `running` | The subprocess is alive. |
+| `done` | It exited 0. |
+| `error` | It exited non-zero, or the hub failed to run it at all (`rc: -1`). |
+| `stopped` | A human called the stop route. Everything the stage had already written to disk is kept — the scrapers save after every creator, so a stop between creators keeps the whole corpus scraped so far. |
+
+`stopped` is decided by an explicit marker, never by the return code: a cooperative stop
+exits 0 and a signalled one exits −15, and the crash path already uses −1, so no number can
+tell a stop from a failure. `rc` is always a real integer, never `null`.
 
 !!! note "A stage's failure tail carries both streams"
 
@@ -465,6 +484,64 @@ Stage jobs are launched generically and tracked as background subprocesses; the 
     progress rather than the error. It used to be `stdout or stderr`, which meant any
     stage that printed a progress line lost its entire stderr — discarding the reason in
     exactly the case anyone needed it.
+
+### Stopping a stage
+
+```
+POST /api/pipeline/{platform}/{stage}/stop
+```
+
+Ends the newest `queued`-or-`running` job for that stage on that platform. **202** on
+success, with:
+
+```json
+{"job_id": "instagram:scrape:7", "stage": "scrape", "platform": "instagram",
+ "signalled": true, "halting_run": null}
+```
+
+| Field | Meaning |
+|---|---|
+| `job_id` | The job that was marked. Its status becomes `stopped` once the process is reaped. |
+| `signalled` | Whether a live process group actually received SIGTERM. `false` when the job was still `queued` — the marker is set anyway and the process is simply never spawned. |
+| `halting_run` | The `run_id` of the full pipeline run this stage belonged to, or `null`. Non-null means the rest of that run has been halted. |
+
+Status codes, checked in this order:
+
+| Code | When |
+|---|---|
+| **404** | `unknown platform {platform}` |
+| **400** | `stage == "render"` — *"a render cannot be stopped — render jobs are keyed per item, and a half-rendered item leaves partial frames behind."* |
+| **400** | any other unknown stage: `stage must be one of [...]` |
+| **409** | `nothing to stop — {stage} is not running on {platform}`. The stage exists; the state is wrong. |
+| **202** | Accepted. |
+
+How it ends the process:
+
+- The stop marker is recorded **before** any signal, so it is always visible by the time the
+  job thread writes the final status.
+- Stages are spawned with `start_new_session`, so each runs in its own process group and the
+  whole group is signalled. Several stages shell out via `uv run`, where the direct child is
+  a wrapper and the real work is its grandchild — signalling only the wrapper would leave the
+  worker alive, still holding the pipe open, and the job pinned at `running` forever.
+- SIGTERM first. If the group is still alive **20 seconds** later it is SIGKILLed. The window
+  is deliberately longer than `./stop`'s: the scrapers check their stop flag between
+  creators, and the inter-creator delay is 10–20 s, which is exactly when a stop lands
+  cleanly.
+- Clicking twice is harmless — the second call re-signals a still-running group.
+
+!!! warning "Stopping a stage inside a full pipeline run halts the run"
+    When the stopped job carries a `run_id`, the supervisor **returns** instead of advancing
+    to the next stage: later stages never launch, one `run_stopped` record is written
+    carrying `data.skipped` (the stages that never ran), and the platform's run claim is
+    released so it can be run again immediately. A button labelled *Stop* that then went on
+    to launch `analysis-engine` — a paid stage — would be a trap. Readiness is purely
+    file-existence based, so whatever the stopped stage did save is usable at once: if
+    `scrape` was stopped after 200 reels, *Analyze* is runnable the instant the stop lands.
+
+A stop is a normal outcome and is logged as one: one `job_stopped` record at `level: "warn"`
+(never `job_failed`), plus `run_stopped` when a run was halted. A genuine non-zero exit
+inside a run-all still logs `run_halted`, whose message now reads *"Full pipeline failed
+at …"* — "stopped" now means a person did it.
 
 ### Scheduled runs
 

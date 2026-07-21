@@ -8,6 +8,9 @@
 // "render" is the per-item render trigger (POST /api/studio/{p}/{file}/render).
 // Its job key is `${platform}:render:${file}` — one job per studio item, so the
 // Renders tab can look a card's live status up with a single map read.
+// "propose" is the free producer stage the cascade fires (POST /api/pipeline/{p}/propose):
+// it reads blueprints and writes studio markdown, and spends nothing — unlike "render",
+// which spends image credits per frame and is never automatic.
 export type Stage =
   | "scrape"
   | "analyze"
@@ -15,8 +18,12 @@ export type Stage =
   | "analysis-engine"
   | "auto-search"
   | "auto-search-beat"
+  | "propose"
   | "render";
-export type JobStatus = "queued" | "running" | "done" | "error";
+/** `stopped` is a person's own decision, not a failure: the scrapers save after every
+    creator, so a stopped stage keeps everything it had already written. It is deliberately
+    NOT `error` (which over-alarms) and NOT absent (which would read as "never ran"). */
+export type JobStatus = "queued" | "running" | "done" | "error" | "stopped";
 
 /** Whether a stage can do anything useful right now, and what would unblock it.
     `blocked_by` is a stage the user can run to clear the block — the one-click fix. It is
@@ -571,4 +578,47 @@ export interface ScheduleRow {
   last_run_at: number;
   stages: Stage[];
   next_run_at: number | null;
+}
+
+/** The four stages the cascade can fire, in pipeline order. `render` is deliberately
+    absent — the hub's CASCADE_STAGES has no render entry, so no configuration can make
+    the chain spend image credits. The chain stops at the studio; rendering waits for you. */
+export const CASCADE_STAGES = ["analyze", "media", "analysis-engine", "propose"] as const;
+export type CascadeStage = (typeof CASCADE_STAGES)[number];
+
+/** GET /api/cascade — one row per platform, with the boundary arithmetic already done.
+
+    The cascade is the second heartbeat: the timer (`ScheduleRow`) decides WHEN whole runs
+    happen, the cascade decides when the single next stage happens, keyed on how much NEW
+    input has landed rather than on a clock.
+
+    `enabled` as returned by GET is the EFFECTIVE value: a row carrying a `problem` reports
+    `enabled: false` and an empty `due`, because that is the truth about what will happen.
+    The stored intent survives on disk, so fixing the funnel brings the platform back. */
+export interface CascadeRow {
+  enabled: boolean;
+  /** may the analysis-engine boundary fire? It calls a PAID API once per clip. */
+  include_blueprints: boolean;
+  /** how much NEW input each boundary needs before it fires, keyed by the stage that fires */
+  steps: Record<CascadeStage, number>;
+  /** high-water marks — how much input each boundary has already consumed. Machine-owned;
+      accepted-but-ignored on PUT. */
+  marks: Record<CascadeStage, number>;
+  /** how many recipes one propose firing publishes (1..25), clamped by availability */
+  propose_count: number;
+
+  // ---- derived by the hub, never written back ----
+  stages: CascadeStage[];
+  /** the live input count for each boundary, in that boundary's own unit */
+  counts: Record<CascadeStage, number>;
+  /** boundaries that would fire on the next tick */
+  due: CascadeStage[];
+  /** the count at which each boundary next comes due (marks + steps) */
+  next_at: Record<CascadeStage, number>;
+  /** non-null when the stored configuration refuses to run — show this sentence in place
+      of the toggle state rather than leaving a platform silently off. */
+  problem: string | null;
+  /** the registered producer that proposes, or null when none/several do */
+  propose_agent: string | null;
+  propose_agent_problem: string | null;
 }
