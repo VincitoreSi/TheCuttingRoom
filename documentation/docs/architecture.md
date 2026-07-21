@@ -246,6 +246,28 @@ GET /api/config/agent/{agent}/secrets/status → [{name, env_var, present, requi
 Actual credentials (Gemini keys, Anthropic keys, Instagram session cookies) stay local to the
 agent process that needs them, referenced everywhere else purely by the env-var name.
 
+## Pipeline control
+
+The hub implements three mechanisms for controlling when and how pipeline stages execute:
+
+- **Manual dispatch** — `POST /api/pipeline/{platform}/{stage}` fires one stage. The hub
+  checks readiness (are the preconditions met?) and returns 409 with the reason if not.
+  `POST /api/pipeline/{platform}/run-all` chains `scrape → analyze → media →
+  analysis-engine` in order, stopping at the first failure.
+- **Timer-based schedule** (`PUT /api/schedule/{platform}`) — configurable hourly cadence
+  per platform. Runs free stages only (`analysis-engine` is opt-in). Persisted across hub
+  restarts and fail-closed on any config read problem.
+- **Cascading heartbeat** (`PUT /api/cascade/{platform}`) — a 60s background tick that
+  automatically triggers downstream stages based on input watermarks rather than wall-clock
+  time. Off by default. Stages fire serially (never in parallel), and the tick respects
+  backpressure from manual runs and run-all. `render` is structurally excluded — it can never
+  fire through the cascade.
+
+Any running stage can be stopped via `POST /api/pipeline/{platform}/{stage}/stop`, which
+sends SIGTERM to the whole process group. The scrapers check a cooperative stop flag between
+creators, so everything already saved is kept. If the process survives 20 seconds it receives
+SIGKILL. Stopping a stage inside a `run-all` halts the entire run.
+
 ## Deployment note
 
 The pipeline is designed to run **local-first**: `uv run cli.py start` inside `ReelScraper/` boots

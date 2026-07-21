@@ -462,9 +462,54 @@ Stage jobs are launched generically and tracked as background subprocesses; the 
 | `PUT /api/cascade/{platform}` | `{enabled?, include_blueprints?, steps?, propose_count?}` — every field optional. |
 | `GET /api/events` | SSE stream — see below. |
 
+### The cascade
+
+The cascade is a background daemon tick (every 60s) that auto-triggers downstream stages
+as new data lands. It answers "how much new work?" with counters and watermarks rather than
+"when?" like the timer-based scheduler — each stage fires at most once per batch of input.
+
+Per-platform, stored in `config/pipeline_cascade.json` (gitignored — per-install state):
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master switch. Off by default — no data is ever read or counted while disabled. |
+| `include_blueprints` | bool | `false` | Whether `analysis-engine` (a paid API per clip) may fire unattended. Must be explicitly opted into. |
+| `steps` | object | `{analyze:40, media:40, "analysis-engine":40, propose:40}` | How many units of input trigger one stage fire. Must be monotonic (no step smaller than the one before it). |
+| `propose_count` | int | `3` | How many proposals `propose` publishes per fire, clamped to the number of new blueprints available. |
+| `marks` | object | per-input-count | **Read-only.** Watermarks last consumed at: `analyze` counts raw scraped reels, `media` counts scored corpus rows, `analysis-engine` counts persisted mp4s, `propose` counts blueprints. Reset only by disabling/enabling. |
+
+Behaviour:
+
+- The tick is **serial per platform**: only the most-upstream due stage fires in one tick, so no
+  stage runs while another is rewriting its input. A manual run or `run-all` also blocks the cascade
+  (backpressure via `JOBS`).
+- `render` can never fire through the cascade — it is not in `CASCADE_STAGES`, no config key or
+  value can name it, and the PUT endpoint drops keys outside the allowlist. Costs money; stays
+  human-only.
+- Off-to-on **stamps marks** to current corpus counts, so enabling against an already-scraped corpus
+  does not fire four stages in immediate succession.
+- A hand-edited config that widens the funnel (`media:10` when `analyze:40`) **disables** that
+  platform and surfaces the problem in `GET /api/cascade` rather than silently burning a window.
+- Unreadable config or corpus → **fail closed**: cascade disables itself. The tick never raises.
+
+`GET /api/cascade` returns a row per platform with derived fields already computed:
+
+```json
+{"instagram": {"enabled": false, "include_blueprints": false, "propose_count": 3,
+               "steps": {"analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40},
+               "marks": {"analyze": 0, "media": 0, "analysis-engine": 0, "propose": 0},
+               "counts": {"analyze": 870, "media": 810, "analysis-engine": 405, "propose": 120},
+               "next_at": {"analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40},
+               "due": ["analyze"], "stages": ["analyze", "media", "analysis-engine", "propose"],
+               "problem": null}}
+```
+
+`PUT /api/cascade/{platform}` accepts any subset of `{enabled, include_blueprints, steps,
+propose_count}`. Marks in the body are **silently ignored** — they are machine-owned.
+
 ### Job status vocabulary
 
-A job entry carries one of **five** statuses. The first four are unchanged; `stopped` is new.
+A job entry carries one of **five** statuses:
 
 | `status` | Meaning |
 |---|---|
