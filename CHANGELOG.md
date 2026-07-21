@@ -1,0 +1,59 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+Nothing yet.
+
+## [1.0.0] - 2026-07-20
+
+First release. A multi-agent content pipeline: scrape handpicked creators, score
+every post for virality, break the winners into generation-ready blueprints, and
+spin those into ready-to-post drafts behind a human gate.
+
+### Added
+- **ReelScraper** — the hub at `127.0.0.1:8787` and the scraper in one component.
+  Serves the whole `/api/*` contract (corpus, analysis, audio, producers, studio +
+  human gate, references, discovery, renders, logs, evals, per-agent config and
+  secret *status*, SSE) and drives the pipeline stages as subprocesses. Scrapers
+  for Instagram (guest-only), X (burner session), and YouTube (key-free InnerTube).
+- **Four virality signals** — engagement rate, reach multiplier, outlier score, and
+  velocity, percentile-normalized and blended per platform into a 0–100 score + tier.
+- **AnalysisEngine** — watches top clips and writes rich schema-v2 blueprints
+  (shots, generation prompts, regeneration guide, virality formula, self-evaluation)
+  to `POST /api/analysis/{platform}`.
+- **The Producer SPI** — every generation agent self-registers a manifest, reads only
+  hub inputs, and writes only hub outputs. `SimilarContent` (`kind: clone`) ships as
+  the worked producer; `_producer-template/` is the scaffold for new ones.
+- **AutoSearch** — discovery agent that finds and scores new creators; candidates go
+  through the human gate before the hub appends them to `pages.txt`. Off by default
+  behind a fail-closed `discovery_enabled` kill-switch.
+- **Dashboard** — "The Cutting Room" React control board: producer lanes, the human
+  gate, sounds, blueprints, per-agent workflow boards, activity and evals.
+- **Audio intelligence** — `audio_id` as the sound join key, plus trend scoring and
+  Rising/Hot/Saturated/Evergreen buckets derived from tracked creators.
+- Config-driven niche system with Fashion as the worked example, plus a
+  `scripts/new-niche.sh` converter that branches a full pipeline per niche.
+- One-command demo (`./demo`) that runs the pipeline end to end and surfaces
+  five easy-to-make clone recipes.
+- CI/CD via GitHub Actions (Dashboard lint/typecheck/build/test, a Python test matrix
+  across all four Python components, MkDocs site deploy, tagged releases) and a
+  pre-commit config.
+- Docs: the MkDocs site under `documentation/`, plus README, CONTRIBUTING,
+  CODE_OF_CONDUCT, SECURITY, and ROADMAP.
+
+### Security
+- Secrets are declared by env-var **name** only and read from gitignored per-agent
+  `.env` files. The hub surfaces secret *status* (present/absent) and never stores or
+  returns a value.
+- Instagram access is guest-only; X requires a burner session and is never a personal
+  account. Rate-limit circuit breakers stop after three consecutive limits.
+- Generated media is kept in a separate namespace from the scraped corpus, so a
+  producer can never overwrite a real creator's video.
+
+[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/VincitoreSi/TheCuttingRoom/releases/tag/v1.0.0

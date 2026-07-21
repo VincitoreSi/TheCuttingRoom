@@ -1,0 +1,23 @@
+version: 2
+updates:
+  # Dashboard (npm)
+  - package-ecosystem: "npm"
+    directory: "/Dashboard"
+    schedule:
+      interval: "weekly"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # Python components (pip/uv)
+  - package-ecosystem: "pip"
+    directories:
+      - "/ReelScraper"
+      - "/AnalysisEngine"
+      - "/AutoSearch"
+      - "/SimilarContent"
+    schedule:
+      interval: "weekly"

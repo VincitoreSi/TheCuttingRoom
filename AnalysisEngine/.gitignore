@@ -1,0 +1,17 @@
+# python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# secrets — never commit; env-var NAMES are documented in .env.example
+.env
+
+# per-run logs (named by start_time)
+logs/
+
+# temp media downloads (Gemini File API scratch)
+work/
+
+.DS_Store

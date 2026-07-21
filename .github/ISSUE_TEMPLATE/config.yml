@@ -1,0 +1,11 @@
+# VincitoreSi is a placeholder — `bash scripts/apply-identity.sh` rewrites it from the
+# repo-root .env. Until it is substituted these two links 404. Bug reports and feature
+# requests are unaffected: they go through bug_report.yml / feature_request.yml.
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/VincitoreSi/TheCuttingRoom/discussions
+    about: Ask questions and discuss ideas here instead of opening an issue.
+  - name: Security vulnerability
+    url: https://github.com/VincitoreSi/TheCuttingRoom/security/advisories/new
+    about: Report vulnerabilities privately — please do not open a public issue.

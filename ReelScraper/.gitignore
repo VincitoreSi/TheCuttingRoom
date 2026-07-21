@@ -1,0 +1,27 @@
+# python
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# secrets — burner login cookie, never commit
+platforms/*/session.txt
+session.txt
+
+# per-session logs (named by start_time)
+logs/
+
+# local, regenerable, or large
+media/
+renders/
+analysis/
+frontend/dist/
+memory/*/content.db
+.DS_Store
+
+# raw scrape backups / generated outputs
+platforms/*/*_raw*.json
+platforms/*/profiles_meta*.json
+platforms/*/content.json
+*.xlsx
+*.csv

@@ -1,0 +1,14 @@
+# secrets — never commit (values live here, referenced by NAME in agent.json — §10.4)
+.env
+
+# per-run logs (local full-fidelity JSONL; central curated events go to the hub — §10.1)
+logs/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# os cruft
+.DS_Store

@@ -1,0 +1,54 @@
+name: Bug report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report! Please **do not include any secrets, API keys, or
+        session cookies** in logs you paste here.
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of the pipeline?
+      options:
+        - ReelScraper (hub / scraper)
+        - AnalysisEngine
+        - AutoSearch
+        - SimilarContent / producer
+        - Dashboard
+        - Docs / CI / tooling
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, plus what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, commands, and config to reproduce.
+      placeholder: |
+        1. cd ReelScraper && uv run cli.py start
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: Paste output. Redact secrets first.
+      render: shell
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, Node version, and which niche/config.
+    validations:
+      required: true

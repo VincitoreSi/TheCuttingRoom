@@ -1,0 +1,69 @@
+site_name: The Cutting Room
+
+# VincitoreSi is a placeholder — `bash scripts/apply-identity.sh` rewrites it from .env.
+# Needed for canonical URLs and a correct sitemap.xml on the GitHub Pages deploy
+# (.github/workflows/docs.yml); mkdocs-material warns when it is absent.
+site_url: https://VincitoreSi.github.io/TheCuttingRoom/
+
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - toc:
+      permalink: true
+
+nav:
+  - Home:
+      - Overview: index.md
+  - Guide:
+      - Quickstart & Usage: quickstart.md
+      - Entry Points & Demo Data: entry-points.md
+      - CLI Reference: cli.md
+      - Niches: niches.md
+  - Architecture:
+      - Architecture: architecture.md
+      - Concepts & Design: concepts.md
+      - API Reference: api-reference.md
+  - Agents:
+      - ReelScraper: agents-reelscraper.md
+      - AnalysisEngine: agents-analysisengine.md
+      - Producers & SPI: agents-producers.md
+      - AutoSearch: agents-autosearch.md
+      - Dashboard: agents-dashboard.md
+  - Contributing:
+      - Extending & Contributing: contributing.md
+  # Long-form internal design notes. Deliberately last and clearly labelled: these
+  # are the deep reference, not the guided path a new reader should start on.
+  - Design notes:
+      - Architecture Reference: internal/architecture-reference.md
+      - AnalysisEngine Design: internal/analysis-engine-design.md
+
+site_dir: site

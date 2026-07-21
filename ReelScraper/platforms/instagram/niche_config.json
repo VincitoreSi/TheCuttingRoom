@@ -1,0 +1,37 @@
+{
+  "niche": "Fashion",
+  "reels_per_creator": 250,
+
+  "_comment_discovery": "Auto-discovery of MORE pages in this niche. OFF by default — the default run only analyzes the handpicked links in pages.txt. Search + seed-expand require a burner sessionid in session.txt (Instagram gates search behind login); guest mode alone cannot search. Tweak keywords/seeds/limits here, or just tell Claude what niche to target and it will rewrite this block.",
+  "discovery": {
+    "enabled": false,
+    "keywords": [
+      "fashion", "outfit", "ootd", "style", "styling", "streetwear",
+      "fashion blogger", "lookbook", "wardrobe", "thrift haul", "grwm",
+      "fashion designer", "fit check", "aesthetic outfits", "capsule wardrobe"
+    ],
+    "seeds": [],
+    "search_terms": 6,
+    "per_query": 50,
+    "max_candidates": 0,
+    "min_followers": 5000,
+    "expand_related": true
+  },
+
+  "_comment_virality": "How 'viral' is scored. Each reel gets 4 signals, each normalized to a 0-1 percentile across the whole dataset, then blended by these weights into a 0-100 virality_score. Adjust weights to bias what 'viral' means for you (weights are auto-normalized to sum to 1).",
+  "virality": {
+    "weights": {
+      "reach_multiplier": 0.35,
+      "outlier_score": 0.25,
+      "engagement_rate": 0.25,
+      "velocity": 0.15
+    },
+    "tiers": [
+      { "label": "Viral", "min_score": 85 },
+      { "label": "High", "min_score": 70 },
+      { "label": "Above Average", "min_score": 50 },
+      { "label": "Normal", "min_score": 0 }
+    ],
+    "top_n": 100
+  }
+}

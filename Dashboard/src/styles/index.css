@@ -1,0 +1,307 @@
+@import "tailwindcss";
+
+/* =====================================================================
+   THE CUTTING ROOM — design tokens
+   Single source of truth. Every color, radius, and easing lives here as
+   a CSS custom property; components reference var(--…) only. Dark is the
+   default identity; [data-theme="light"] is a warm-paper "room by day".
+   ===================================================================== */
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* ground — a self-healing cutting mat: warm green-black */
+  --bg: #10120e;
+  --bg-tint: #14170f;
+  --surface: #181b14;
+  --surface-2: #20241a;
+  --surface-3: #272c20;
+
+  /* hairlines — the mat's measurement grid, warm */
+  --line: #313629;
+  --line-strong: #444b39;
+
+  /* ink — chalk / bone on the mat */
+  --ink: #ece5d4;
+  --ink-2: #d3ccba;
+  --ink-dim: #9a9482;
+  --ink-faint: #6a6656;
+
+  /* brass — attention / active / selected / focus (the tape ferrule & pins) */
+  --brass: #c9a24b;
+  --brass-ink: #e2bf6c;
+  --brass-deep: #9a7a2e;
+  --brass-wash: color-mix(in srgb, var(--brass) 14%, transparent);
+
+  /* chalk-sage — success / approve / done (lifted to read on green-black) */
+  --sage: #a9bd7d;
+  --sage-ink: #c1d497;
+  --sage-wash: color-mix(in srgb, var(--sage) 13%, transparent);
+
+  /* oxblood — brand / links / "working" thread */
+  --oxblood: #b5402f;
+  --oxblood-ink: #d6684f;
+  --oxblood-wash: color-mix(in srgb, var(--oxblood) 15%, transparent);
+
+  --amber: #cf9a3a;   /* warn */
+  --danger: #e0533f;  /* reject / error — the ONLY hotter red */
+  --danger-wash: color-mix(in srgb, var(--danger) 15%, transparent);
+
+  /* the thread / tape gradient — the seam pulled through brass.
+     Use ONLY on things the agent acts through. */
+  --thread: linear-gradient(118deg, #b5402f 0%, #c07a34 46%, #c9a24b 100%);
+  --thread-soft: linear-gradient(118deg,
+      color-mix(in srgb, #b5402f 82%, transparent) 0%,
+      color-mix(in srgb, #c07a34 82%, transparent) 46%,
+      color-mix(in srgb, #c9a24b 82%, transparent) 100%);
+  /* a pale thread tint for LARGE fills that sit behind body text — keeps the
+     orange-thread identity but stays legible with --ink in both themes
+     (mixes over --surface, which flips per theme). */
+  --thread-wash: linear-gradient(118deg,
+      color-mix(in srgb, #b5402f 22%, var(--surface)) 0%,
+      color-mix(in srgb, #c07a34 22%, var(--surface)) 46%,
+      color-mix(in srgb, #c9a24b 22%, var(--surface)) 100%);
+  /* brass as a struck metal, not a flat fill */
+  --brass-metal: linear-gradient(155deg, #e2bf6c 0%, #c9a24b 42%, #a07d31 100%);
+
+  /* warm shadows (oxblood-tinted black) — cards sit ON the mat */
+  --shadow-1: 0 1px 2px rgba(14, 9, 6, 0.5), 0 2px 8px rgba(14, 9, 6, 0.34);
+  --shadow-2: 0 2px 4px rgba(14, 9, 6, 0.5), 0 10px 26px rgba(14, 9, 6, 0.44);
+  --shadow-lift: 0 4px 8px rgba(14, 9, 6, 0.5), 0 18px 44px rgba(12, 7, 4, 0.52);
+  /* 1px inner top-bevel so a raised panel catches the overhead light */
+  --bevel: inset 0 1px 0 color-mix(in srgb, var(--ink) 7%, transparent);
+
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--brass) 34%, transparent);
+
+  /* geometry */
+  --r-lg: 15px;
+  --r-md: 9px;
+  --r-sm: 6px;
+  --control-h: 38px;
+
+  /* the one easing — used everywhere */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur: 0.42s;
+
+  /* type */
+  --font-display: "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Menlo", "Consolas", monospace;
+
+  /* tier colors — a measured scale, brass at the top */
+  --tier-viral: #d6a84a;
+  --tier-high: #b8935a;
+  --tier-above: #8f9e6a;
+  --tier-avg: #7d8a97;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f1ebdf;
+  --bg-tint: #ece5d6;
+  --surface: #fbf7ef;
+  --surface-2: #f3ecdd;
+  --surface-3: #eae1cf;
+
+  --line: #ddd2bd;
+  --line-strong: #c8ba9f;
+
+  --ink: #241c13;
+  --ink-2: #40372a;
+  --ink-dim: #6f6250;
+  --ink-faint: #9a8d78;
+
+  --brass: #9a7a24;
+  --brass-ink: #7f6416;
+  --brass-deep: #6a5313;
+  --brass-wash: color-mix(in srgb, var(--brass) 12%, transparent);
+
+  --sage: #5f6e3e;
+  --sage-ink: #4c5a2e;
+  --sage-wash: color-mix(in srgb, var(--sage) 13%, transparent);
+
+  --oxblood: #9a3327;
+  --oxblood-ink: #86271c;
+  --oxblood-wash: color-mix(in srgb, var(--oxblood) 12%, transparent);
+
+  --amber: #ab7414;
+  --danger: #c23b2a;
+  --danger-wash: color-mix(in srgb, var(--danger) 12%, transparent);
+
+  --thread: linear-gradient(118deg, #9a3327 0%, #ab5228 46%, #9a7a24 100%);
+  --thread-soft: linear-gradient(118deg,
+      color-mix(in srgb, #9a3327 80%, transparent) 0%,
+      color-mix(in srgb, #ab5228 80%, transparent) 46%,
+      color-mix(in srgb, #9a7a24 80%, transparent) 100%);
+  --brass-metal: linear-gradient(155deg, #b8942f 0%, #9a7a24 45%, #755b16 100%);
+
+  --shadow-1: 0 1px 2px rgba(80, 56, 30, 0.14), 0 2px 8px rgba(80, 56, 30, 0.1);
+  --shadow-2: 0 2px 4px rgba(80, 56, 30, 0.14), 0 10px 26px rgba(80, 56, 30, 0.13);
+  --shadow-lift: 0 4px 8px rgba(80, 56, 30, 0.16), 0 18px 44px rgba(80, 56, 30, 0.16);
+  --bevel: inset 0 1px 0 rgba(255, 255, 255, 0.55);
+
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--brass) 32%, transparent);
+
+  --tier-viral: #9a7a24;
+  --tier-high: #997c3d;
+  --tier-above: #6b7444;
+  --tier-avg: #5c6675;
+}
+
+/* =====================================================================
+   base
+   ===================================================================== */
+* { border-color: var(--line); }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;               /* the body never scrolls sideways */
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+
+/* Ambient atmosphere: a warm overhead glow + a faint diagonal twill weave,
+   painted in ink via color-mix so it holds in either theme. Zero image cost. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(120% 62% at 50% -12%,
+        color-mix(in srgb, var(--brass) 12%, transparent) 0%, transparent 58%),
+    radial-gradient(100% 80% at 88% 4%,
+        color-mix(in srgb, var(--oxblood) 8%, transparent) 0%, transparent 46%),
+    repeating-linear-gradient(45deg,
+        color-mix(in srgb, var(--ink) 2.4%, transparent) 0 1px,
+        transparent 1px 7px);
+}
+/* vignette — the table is lit from above, edges fall into shadow */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(130% 100% at 50% 32%, transparent 58%,
+      color-mix(in srgb, #000 var(--vig, 30%), transparent) 100%);
+}
+:root[data-theme="light"] { --vig: 9%; }
+
+#root { position: relative; z-index: 1; }
+
+::selection { background: var(--brass-wash); color: var(--ink); }
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--r-sm);
+}
+
+/* thin brass scrollbar */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--brass) 34%, transparent);
+  border-radius: 99px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--brass) 55%, transparent); background-clip: padding-box; }
+
+/* =====================================================================
+   type helpers
+   ===================================================================== */
+.font-display { font-family: var(--font-display); }
+.font-mono { font-family: var(--font-mono); font-feature-settings: "tnum" 1, "zero" 1; }
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* the "spec sheet" voice — mono, uppercase, wide-tracked micro-label */
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+/* the thread painted onto text (big numerals, links-on-hover) */
+.thread-text {
+  background: var(--thread);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* =====================================================================
+   material surfaces
+   ===================================================================== */
+.mat {
+  background:
+    linear-gradient(var(--surface), var(--surface)),
+    /* faint grain so flat panels aren't plastic */
+    var(--grain, none);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1), var(--bevel);
+}
+.mat-2 { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md); }
+
+.hairline { border-color: var(--line); }
+
+/* the shared control height, so buttons/inputs/selects align to the px */
+.control-h { height: var(--control-h); }
+
+/* =====================================================================
+   motion primitives
+   ===================================================================== */
+@keyframes sheen {
+  0% { background-position: -140% 0; }
+  100% { background-position: 240% 0; }
+}
+@keyframes seam-march { to { stroke-dashoffset: -14; } }
+@keyframes needle-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+@keyframes pin-drop {
+  0% { transform: translateY(-9px) rotate(-18deg) scale(0.8); opacity: 0; }
+  60% { transform: translateY(1px) rotate(-8deg) scale(1.04); opacity: 1; }
+  100% { transform: translateY(0) rotate(-12deg) scale(1); opacity: 1; }
+}
+@keyframes count-flick { from { opacity: 0.4; } to { opacity: 1; } }
+@keyframes draw-tape { from { stroke-dashoffset: var(--tape-len, 1200); } to { stroke-dashoffset: 0; } }
+
+.sheen-sweep {
+  background-image: linear-gradient(100deg,
+      transparent 20%,
+      color-mix(in srgb, var(--brass-ink) 40%, transparent) 42%,
+      color-mix(in srgb, #fff 22%, transparent) 50%,
+      transparent 62%);
+  background-size: 220% 100%;
+  animation: sheen 4.6s var(--ease) infinite;
+}
+
+/* =====================================================================
+   accessibility: everything yields to reduced motion
+   ===================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

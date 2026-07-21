@@ -1,0 +1,80 @@
+# niches/travel.yaml — example niche: Travel.
+# Travel is a SLOW-BURN, evergreen niche: destination reels keep collecting views and saves
+# for weeks, so velocity is heavily DOWN-weighted while engagement (saves/shares) and outlier
+# breakouts carry more of the score. See niches/fashion.yaml for the fully-commented schema.
+
+niche: Travel
+
+platforms:
+
+  instagram:
+    reels_per_creator: 250
+    discovery:
+      keywords:
+        - travel
+        - travel vlog
+        - wanderlust
+        - hidden gems
+        - travel tips
+        - backpacking
+        - itinerary
+        - budget travel
+        - solo travel
+        - destination
+        - travel guide
+        - road trip
+        - things to do in
+        - travel reels
+        - bucket list
+      seeds: []
+    weights:
+      reach_multiplier: 0.30
+      outlier_score: 0.30
+      engagement_rate: 0.30
+      velocity: 0.10
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@example.travel.diaries"
+      - "@example.hidden.gems"
+      - "@example.backpack.tales"
+      - "@example.wander.lens"
+
+  x:
+    posts_per_creator: 200
+    # Even on X, travel threads compound slowly rather than spiking — velocity stays low.
+    weights:
+      reach_multiplier: 0.30
+      outlier_score: 0.28
+      engagement_rate: 0.30
+      velocity: 0.12
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@ex_travel_1"
+      - "@ex_wanderlust"
+      - "@ex_roadtrip_hd"
+
+  youtube:
+    shorts_per_creator: 200
+    # Shorts + evergreen travel = the slowest burn of all; velocity is the lightest signal.
+    weights:
+      reach_multiplier: 0.35
+      outlier_score: 0.35
+      engagement_rate: 0.22
+      velocity: 0.08
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@example.travel.shorts"
+      - "@example.roadtrip.tv"
+      - "@example.wander.guide"

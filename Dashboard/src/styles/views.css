@@ -1,0 +1,1243 @@
+/* =====================================================================
+   View-level styles: dashboard, board, corpus grid, config, studio.
+   ===================================================================== */
+
+/* ------------------------------------------------------------- Stat tiles */
+.stat-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+.stat-tile { padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
+.stat-tile__num {
+  font-family: var(--font-display);
+  font-size: 40px;
+  line-height: 0.95;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------- Board */
+.board { display: flex; flex-direction: column; gap: 16px; position: relative; }
+.board__track {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* ---- Band A: the live status band above the tape (R5) ---- */
+.board__live {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.board__live--working {
+  border-color: color-mix(in srgb, var(--oxblood) 55%, transparent);
+  background: color-mix(in srgb, var(--oxblood) 5%, var(--surface-2));
+}
+.board__live--done { border-color: color-mix(in srgb, var(--sage) 45%, transparent); }
+.board__live--error {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface-2));
+}
+.board__live-label {
+  font-size: 14px;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.board__live-tiles {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-left: auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.board__live-tile { display: inline-flex; align-items: baseline; gap: 5px; }
+.board__live-tile-n { font-size: 15px; color: var(--ink); }
+.board__live-tile-l {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+}
+/* the chalk-thread packet — same 22px/0.7s needle cadence as the connectors */
+.board__packet {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  overflow: hidden;
+  padding: 4px 9px 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--brass-ink);
+  background: var(--brass-wash);
+  border: 1px solid color-mix(in srgb, var(--brass) 40%, transparent);
+}
+.board__packet .tnum { font-size: 12.5px; color: var(--ink); }
+.board__packet-stitch {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg,
+    color-mix(in srgb, var(--brass) 80%, transparent) 0 5px,
+    transparent 5px 11px);
+  background-size: 22px 100%;
+  opacity: 0.32;
+  animation: stitch-travel 0.7s linear infinite;
+  pointer-events: none;
+}
+
+/* mobile-only vertical measuring rail — the tape motif when the board stacks */
+.board__vtape { display: none; }
+/* stretch (not center) so every node fills its cell's full height — the track
+   already equalizes cell heights, and a stretched node lets the footer's
+   mt-auto pin the Run button to a shared baseline across all seven cells. */
+.board__cell { display: flex; align-items: stretch; flex: 1 1 0; min-width: 0; }
+.board__cell > .stage-node { flex: 1 1 0; min-width: 0; }
+/* the last cell has no connector — reserve the same 32px gutter its siblings
+   give theirs, so all seven nodes render at exactly equal width. */
+.board__cell:last-child > .stage-node { margin-right: 32px; }
+/* the Run button spans the card so all five stage cards share one CTA baseline. */
+.board__run { width: 100%; }
+/* the count string is mono and can run long (e.g. "1030 blueprints"); keep it
+   on one line so it never wraps and shoves the action out of alignment. */
+.board__count { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* give the Studio link-hint the same footprint as a sibling Run button so its
+   footer doesn't sit visibly shorter. */
+.board__link-hint { min-height: 30px; }
+.board__err {
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--danger);
+  background: var(--danger-wash);
+  border-radius: var(--r-sm);
+  padding: 4px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------- Next step */
+.next-step {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 20px;
+  border-radius: var(--r-lg);
+  border: 1px solid color-mix(in srgb, var(--brass) 34%, var(--line));
+  background:
+    linear-gradient(var(--thread-soft)) padding-box,
+    var(--surface);
+  background-blend-mode: soft-light;
+  overflow: hidden;
+  box-shadow: var(--shadow-1), var(--bevel);
+}
+.next-step__sheen {
+  position: absolute;
+  inset: 0;
+  opacity: 0.5;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+.next-step__body { position: relative; z-index: 1; min-width: 0; }
+.next-step__text { margin-top: 3px; font-size: 14.5px; color: var(--ink); max-width: 62ch; }
+
+/* ------------------------------------------------- Getting started (first run) */
+.getting-started { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.getting-started__step {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  padding: 9px 10px;
+  border-radius: var(--r-md);
+}
+/* A subtle brass WASH (transparent, theme-safe) + a left accent, rather than the
+   saturated --thread-soft gradient, which washed the label out in light theme. */
+.getting-started__step.is-active {
+  background: var(--brass-wash);
+  box-shadow: inset 2px 0 0 var(--brass);
+}
+.getting-started__mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong, var(--line));
+  font: 600 11px/1 var(--font-mono, monospace);
+  color: var(--ink-dim);
+  background: var(--surface);
+}
+.getting-started__step.is-done .getting-started__mark {
+  border-color: transparent;
+  color: var(--sage-ink);
+  background: var(--sage-wash, color-mix(in srgb, var(--sage-ink) 16%, transparent));
+}
+.getting-started__label { font-size: 14px; color: var(--ink); }
+.getting-started__step.is-done .getting-started__label { color: var(--ink-dim); text-decoration: line-through; }
+.getting-started__hint { margin-top: 2px; font-size: 12.5px; color: var(--ink-dim); max-width: 60ch; }
+.getting-started__cta { margin-top: 12px; display: flex; justify-content: flex-end; }
+
+/* the full stderr tail of a failed job, revealed under its Recent-runs row */
+.job-tail {
+  margin: 6px 0 2px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--danger-wash);
+  color: var(--ink-2);
+  font: 11.5px/1.5 var(--font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow: auto;
+}
+
+/* ------------------------------------------------------------- Corpus grid */
+.corpus-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.corpus-toolbar__search { position: relative; flex: 1; min-width: 200px; max-width: 340px; }
+.corpus-toolbar__search .ui-input { padding-left: 34px; }
+.corpus-toolbar__search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--ink-faint); }
+
+.reel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 16px;
+}
+
+.corpus-scroll {
+  height: calc(100vh - 214px);
+  min-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+  contain: strict;
+}
+
+/* segmented control */
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.segmented__btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.segmented__btn:hover { color: var(--ink); }
+.segmented__btn--active { color: var(--brass-ink); background: var(--brass-wash); }
+
+/* factor bars */
+.factor-bar { display: grid; grid-template-columns: 168px 1fr 52px; align-items: center; gap: 10px; padding: 5px 0; }
+.factor-bar__label { font-size: 12.5px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.factor-bar__track { position: relative; height: 8px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.factor-bar__mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--line-strong); }
+.factor-bar__fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; transition: width 0.8s var(--ease), left 0.8s var(--ease); }
+.factor-bar__val { font-family: var(--font-mono); font-size: 12px; text-align: right; }
+
+/* leaderboard */
+.leader-row { display: grid; grid-template-columns: 22px 1fr auto; align-items: center; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.leader-row__rank { font-family: var(--font-mono); font-size: 12px; color: var(--ink-faint); }
+.leader-row__bar { height: 5px; border-radius: 999px; background: var(--thread); }
+
+.reel-card { overflow: hidden; padding: 0; display: flex; flex-direction: column; }
+.reel-card__media {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  background: #000;
+  overflow: hidden;
+}
+.reel-card__media img,
+.reel-card__media video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.reel-card__media video { z-index: 1; opacity: 0; transition: opacity 0.32s var(--ease); }
+.reel-card:hover .reel-card__media video { opacity: 1; }
+.reel-card__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background:
+    radial-gradient(120% 90% at 50% 18%, color-mix(in srgb, var(--surface-3) 92%, transparent), var(--bg)),
+    repeating-linear-gradient(45deg,
+      color-mix(in srgb, var(--ink) 3.5%, transparent) 0 6px, transparent 6px 13px);
+  filter: hue-rotate(calc(var(--seed, 0deg) * 0.04));
+}
+.reel-card__monogram {
+  font-size: 40px;
+  color: var(--ink-faint);
+  letter-spacing: -0.02em;
+  opacity: 0.55;
+  text-transform: lowercase;
+}
+.reel-card__placeholder-note { color: var(--ink-faint); opacity: 0.7; }
+
+.reel-card__scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: linear-gradient(180deg, rgba(8,6,4,0.34) 0%, transparent 26%, transparent 52%, rgba(8,6,4,0.82) 100%);
+  pointer-events: none;
+}
+.reel-card__tier {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+}
+.reel-card__play {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, #000 42%, transparent);
+  backdrop-filter: blur(6px);
+  border: 1px solid color-mix(in srgb, #fff 22%, transparent);
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.9);
+  transition: opacity 0.24s var(--ease), transform 0.24s var(--ease);
+}
+.reel-card:hover .reel-card__play { opacity: 1; transform: scale(1); }
+.reel-card__creator {
+  position: absolute;
+  z-index: 3;
+  bottom: 10px;
+  left: 12px;
+  right: 12px;
+  color: #f4efe4;
+}
+.reel-card__creator .name { font-family: var(--font-display); font-size: 14px; text-shadow: 0 1px 4px rgba(0,0,0,0.7); }
+.reel-card__creator .sub { font-family: var(--font-mono); font-size: 10.5px; opacity: 0.82; }
+
+.reel-card__meta { padding: 11px 12px 13px; display: flex; flex-direction: column; gap: 9px; }
+.reel-card__score { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.reel-card__score .val { font-family: var(--font-display); font-size: 21px; line-height: 1; }
+.reel-card__signals { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+.reel-card__signal { text-align: center; }
+.reel-card__signal .v { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); }
+.reel-card__signal .k { font-family: var(--font-mono); font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-faint); }
+
+/* chalk circle wrapper for top-tier */
+.chalk-wrap { position: relative; }
+
+/* ------------------------------------------------------------- Modal */
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: color-mix(in srgb, #000 62%, transparent);
+  backdrop-filter: blur(4px);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.modal {
+  width: min(960px, 100%);
+  max-height: 88vh;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) 1fr;
+  /* single row bounded to the modal height (minmax's 0 min lets the body shrink
+     below its content) so .modal__body's overflow-y:auto actually scrolls
+     instead of the tall content being clipped by the modal's overflow:hidden. */
+  grid-template-rows: minmax(0, 1fr);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-lift);
+}
+.modal__media { background: #000; position: relative; display: grid; place-items: center; }
+.modal__media video { width: 100%; height: 100%; max-height: 88vh; object-fit: contain; }
+.modal__body { padding: 22px; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
+.modal__close {
+  position: absolute; top: 12px; right: 12px; z-index: 4;
+  width: 32px; height: 32px; border-radius: 999px; display: grid; place-items: center;
+  background: color-mix(in srgb,#000 45%,transparent); color: #fff; cursor: pointer;
+  border: 1px solid color-mix(in srgb,#fff 22%,transparent);
+}
+.modal__caption { font-size: 13px; color: var(--ink-2); white-space: pre-wrap; line-height: 1.55; max-height: 260px; overflow-y: auto; overflow-wrap: anywhere; }
+
+@media (max-width: 720px) {
+  /* stacked: media sizes to itself, body takes the rest and scrolls */
+  .modal { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); max-height: 92vh; }
+  .modal__media { max-height: 46vh; }
+}
+
+/* ------------------------------------------------------------- Config */
+.weight-row { display: grid; grid-template-columns: 150px 1fr 56px; align-items: center; gap: 14px; padding: 9px 0; }
+.weight-row__name { font-size: 13px; color: var(--ink-2); }
+.weight-row__val { font-family: var(--font-mono); font-size: 13px; text-align: right; color: var(--brass-ink); }
+.sum-pill { font-family: var(--font-mono); font-size: 11px; padding: 3px 8px; border-radius: 999px; }
+.sum-pill--ok { color: var(--sage-ink); background: var(--sage-wash); }
+.sum-pill--off { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 6px 0 11px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line-strong);
+  font-size: 12.5px; color: var(--ink-2);
+}
+.chip button { color: var(--ink-faint); display: grid; place-items: center; width: 18px; height: 18px; border-radius: 999px; }
+.chip button:hover { color: var(--danger); background: var(--danger-wash); }
+
+.pages-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow-y: auto; }
+.page-row { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); }
+.page-row .handle { flex: 1; font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ------------------------------------------------------------- Studio */
+.proposal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.markdown { font-size: 13.5px; line-height: 1.6; color: var(--ink-2); overflow-wrap: anywhere; }
+.markdown h1, .markdown h2, .markdown h3 { font-family: var(--font-display); color: var(--ink); margin: 1em 0 0.4em; line-height: 1.2; }
+.markdown h1 { font-size: 20px; } .markdown h2 { font-size: 17px; } .markdown h3 { font-size: 15px; }
+.markdown p { margin: 0.5em 0; }
+.markdown ul { margin: 0.5em 0; padding-left: 1.2em; list-style: disc; }
+.markdown li { margin: 0.2em 0; }
+.markdown code { font-family: var(--font-mono); font-size: 0.9em; background: var(--surface-3); padding: 1px 5px; border-radius: 4px; }
+.markdown strong { color: var(--ink); font-weight: 620; }
+.markdown a { color: var(--oxblood-ink); text-decoration: underline; text-underline-offset: 2px; }
+.markdown hr { border: none; border-top: 1px solid var(--line); margin: 1em 0; }
+
+/* ------------------------------------------------------------- Playbook */
+.insight-row { display: flex; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--line); }
+.insight-kind { flex: none; width: 74px; }
+
+/* =====================================================================
+   SLICE 6.4 — Blueprint, Audio, Sounds, Producers, Studio gate, Activity, Evals
+   All token-referenced; reuses the mat / tape / seam vocabulary.
+   ===================================================================== */
+
+/* ------------------------------------------------------------- Board extras */
+.stage-node--link { cursor: pointer; }
+.stage-node--link:hover { border-color: var(--brass); transform: translateY(-2px); box-shadow: var(--shadow-2); }
+.board__link-hint { display: inline-flex; align-items: center; gap: 4px; color: var(--brass-ink); }
+/* compact "desk ↗" cue in a stage node's header (used when the Run button
+   occupies the bottom slot); brightens as the whole card lifts on hover. */
+.board__desk-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brass-ink);
+  opacity: 0.6;
+  transition: opacity var(--dur) var(--ease);
+}
+.stage-node--link:hover .board__desk-tag,
+.stage-node--link:focus-visible .board__desk-tag { opacity: 1; }
+
+/* ------------------------------------------------------------- Audio card */
+.audio-card {
+  border: 1px solid color-mix(in srgb, var(--brass) 32%, var(--line));
+  border-radius: var(--r-md);
+  background:
+    linear-gradient(var(--thread-soft)) padding-box,
+    var(--surface-2);
+  background-blend-mode: soft-light;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.audio-card--compact { padding: 12px; gap: 8px; }
+.audio-card__head { display: flex; align-items: flex-start; gap: 10px; }
+.audio-card__glyph {
+  display: grid; place-items: center;
+  width: 30px; height: 30px; flex: none;
+  border-radius: var(--r-sm);
+  background: var(--brass-metal); color: #241a08;
+  box-shadow: var(--bevel);
+}
+.audio-card__title { font-size: 15px; line-height: 1.2; overflow-wrap: anywhere; }
+.audio-card__artist { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-dim); overflow-wrap: anywhere; }
+.audio-card__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.audio-card__note { font-size: 12.5px; color: var(--ink-2); }
+.audio-card__note .eyebrow { display: inline; margin-right: 4px; }
+.audio-card__beats { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.audio-card__beat {
+  font-size: 10.5px; color: var(--ink-dim);
+  padding: 1px 6px; border-radius: 999px;
+  background: var(--surface-3); border: 1px solid var(--line);
+}
+.audio-card__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* match the sibling .copy-btn chip exactly so the two actions read as a matched
+   pair, instead of a bare oxblood-underlined link that looked like an error. */
+.audio-card__link {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 26px; padding: 0 9px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--surface-3) 70%, transparent);
+  border: 1px solid var(--line-strong);
+  color: var(--ink-dim);
+  font-family: var(--font-mono); font-size: 11px;
+  text-decoration: none;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    background var(--dur) var(--ease);
+}
+.audio-card__link:hover { color: var(--ink); border-color: var(--brass); background: var(--brass-wash); }
+.audio-card__raw { border-top: 1px solid var(--line); padding-top: 8px; }
+.audio-card__foot { color: var(--ink-faint); }
+
+/* ------------------------------------------------------------- Blueprint panel */
+.bp { display: flex; flex-direction: column; gap: 16px; }
+.bp__topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.bp__summary { font-size: 13.5px; color: var(--ink-2); margin-top: 4px; max-width: 52ch; }
+.bp__score { text-align: right; flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.bp__score-num { font-size: 40px; line-height: 0.9; }
+.bp__evalbar { margin-top: -8px; }
+.bp__criteria { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.bp__criterion { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 9px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); }
+.bp__criterion-k { font-size: 11px; color: var(--ink-dim); text-transform: capitalize; }
+.bp__criterion-v { font-size: 12px; }
+
+.bp__section { border-top: 1px solid var(--line); padding-top: 14px; }
+.bp__section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.bp__row { display: grid; grid-template-columns: 92px 1fr; gap: 10px; padding: 4px 0; font-size: 13px; }
+.bp__row-k { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); padding-top: 2px; }
+.bp__row-v { color: var(--ink-2); min-width: 0; overflow-wrap: anywhere; }
+.bp__inline-chip { display: inline-block; margin: 0 6px 4px 0; padding: 2px 8px; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--line); font-size: 12px; }
+.bp__tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.bp__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* shot list */
+.bp__shots { display: flex; flex-direction: column; gap: 8px; }
+.bp__shot { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); overflow: hidden; }
+.bp__shot--open { border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); }
+.bp__shot-head { display: grid; grid-template-columns: 30px 78px 1fr 20px; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; text-align: left; cursor: pointer; }
+.bp__shot-idx { font-size: 12px; color: var(--brass-ink); }
+.bp__shot-time { font-size: 11px; color: var(--ink-dim); }
+.bp__shot-desc { font-size: 13px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bp__shot-chev { color: var(--ink-faint); transition: transform var(--dur) var(--ease); }
+.bp__shot-chev--open { transform: rotate(90deg); }
+.bp__shot-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--line); }
+.bp__shot-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px; padding-top: 10px; }
+.bp__fact { font-size: 12px; }
+.bp__fact-k { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); margin-right: 6px; }
+.bp__fact-v { color: var(--ink-2); }
+.bp__swatches { display: flex; gap: 4px; }
+.bp__swatch { width: 22px; height: 22px; border-radius: 4px; border: 1px solid color-mix(in srgb, #fff 18%, transparent); }
+
+/* prompt block — copy-ready */
+.prompt-block { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); overflow: hidden; }
+.prompt-block--neg { border-color: color-mix(in srgb, var(--danger) 28%, var(--line)); background: color-mix(in srgb, var(--danger) 4%, var(--surface)); }
+.prompt-block__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
+.prompt-block__text { font-size: 12px; line-height: 1.55; color: var(--ink-2); padding: 10px; white-space: pre-wrap; word-break: break-word; }
+
+.bp__chars { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.bp__char { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); padding: 10px 12px; }
+.bp__char-desc { font-size: 12.5px; color: var(--ink-dim); margin-top: 4px; line-height: 1.5; }
+
+.bp__timeline { display: flex; flex-direction: column; gap: 6px; }
+.bp__overlay { display: grid; grid-template-columns: 88px 1fr auto; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); }
+.bp__overlay-time { font-size: 11px; color: var(--brass-ink); }
+.bp__overlay-text { font-size: 13px; color: var(--ink); white-space: pre-wrap; }
+
+.bp-empty { text-align: center; padding: 40px 20px; border: 1px dashed var(--line-strong); border-radius: var(--r-md); }
+
+/* ------------------------------------------------------------- Sounds */
+.sound-caveat {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--ink-dim); font-size: 12.5px;
+  border-color: color-mix(in srgb, var(--brass) 26%, var(--line));
+}
+.sound-caveat svg { color: var(--brass-ink); flex: none; }
+.sound-table { display: flex; flex-direction: column; }
+.sound-row {
+  display: grid;
+  grid-template-columns: minmax(0, 2.4fr) minmax(120px, 1.1fr) 70px 90px 82px 96px;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.sound-row:last-child { border-bottom: none; }
+.sound-row--head { background: var(--surface-2); }
+.sound-row--head span { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-faint); }
+.sound-row--muted { opacity: 0.62; }
+.sound-glyph { display: grid; place-items: center; width: 26px; height: 26px; border-radius: var(--r-sm); background: var(--surface-3); border: 1px solid var(--line); color: var(--ink-dim); flex: none; }
+.sound-title { font-size: 14px; }
+.sound-artist { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.sound-orig { color: var(--brass-ink); }
+.sound-cell--trend { display: flex; flex-direction: column; gap: 5px; }
+.sound-trend-gauge { width: 100%; }
+.sound-recent { color: var(--ink-faint); }
+.sound-cell--example a { display: inline-flex; align-items: center; gap: 6px; }
+.sound-example img { width: 30px; height: 40px; object-fit: cover; border-radius: 4px; border: 1px solid var(--line); background: #000; }
+.sound-example span { font-size: 11px; color: var(--ink-dim); }
+.sound-cell--actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.sound-open { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); color: var(--ink-dim); }
+.sound-open:hover { color: var(--ink); border-color: var(--brass); }
+@media (max-width: 720px) {
+  .sound-row { grid-template-columns: minmax(0, 2fr) 110px 74px 96px; }
+  .hide-sm { display: none; }
+}
+
+/* ------------------------------------------------------------- Producers */
+.producer { overflow: hidden; }
+.producer__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; }
+.producer__name { font-size: 18px; }
+.producer__consumes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.producer__consumes .eyebrow { margin-right: 2px; }
+.producer__chip { font-size: 10.5px; color: var(--ink-dim); padding: 2px 7px; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--line); }
+.producer__meta { text-align: right; flex: none; }
+.producer__outputs { padding: 0 18px 14px; }
+.producer__output { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); }
+.producer__foot { display: flex; gap: 8px; padding: 10px 18px; border-top: 1px solid var(--line); background: var(--surface-2); }
+.producer__tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 12px; border-radius: var(--r-sm);
+  font-size: 12px; color: var(--ink-dim); cursor: pointer;
+  border: 1px solid transparent;
+}
+.producer__tab:hover { color: var(--ink); background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.producer__tab--active { color: var(--brass-ink); background: var(--brass-wash); border-color: color-mix(in srgb, var(--brass) 34%, transparent); }
+.producer__tab .chev { transition: transform var(--dur) var(--ease); }
+.producer__tab .chev--open { transform: rotate(90deg); }
+.producer__secret-dot { width: 6px; height: 6px; border-radius: 999px; }
+.producer__secret-dot.is-ok { background: var(--sage); }
+.producer__secret-dot.is-missing { background: var(--danger); }
+.producer__panel { padding: 16px 18px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface) 50%, transparent); }
+
+/* Config grid — controls align across a row because each cell is label + control first
+   (single-line label, uniform control height) and the description follows underneath.
+   `align-items: start` so a short cell does not stretch to its row's tallest neighbour. */
+.config-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px 12px; align-items: start; }
+.config-field { display: flex; flex-direction: column; gap: 6px; }
+.config-field__head { display: flex; flex-direction: column; gap: 5px; }
+/* One line, always: a label that wraps to two lines would push its own control out of
+   step with the rest of the row — the exact defect this layout exists to remove. The
+   title attribute keeps the full name reachable when a narrow column truncates it. */
+.config-field__label { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Every control occupies the same vertical slot whatever its natural height (switch 25px,
+   input/select 38px), so the descriptions beneath them start on a common line too. */
+.config-field__control { display: flex; align-items: center; min-height: var(--control-h); }
+.config-field__control > * { width: 100%; }
+.config-field__control > .ui-switch { width: 44px; flex: none; }
+.config-field__hint-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.config-field__hint { font-size: 11.5px; line-height: 1.45; color: var(--ink-faint); margin: 0; }
+.config-field__hint--clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.config-field__more { display: inline-flex; align-items: center; gap: 3px; padding: 0; background: none; border: 0; cursor: pointer; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-dim); }
+.config-field__more:hover { color: var(--brass-ink); }
+.config-field__chev { transform: rotate(90deg); transition: transform 160ms ease; }
+.config-field__chev.is-open { transform: rotate(-90deg); }
+@media (prefers-reduced-motion: reduce) { .config-field__chev { transition: none; } }
+
+.secret-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.secret-chip { font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line-strong); }
+.secret-chip--ok { color: var(--sage-ink); background: var(--sage-wash); border-color: color-mix(in srgb, var(--sage) 45%, transparent); }
+.secret-chip--missing { color: var(--danger); background: var(--danger-wash); border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
+.secret-chip--opt { color: var(--ink-dim); }
+.secret-name { font-size: 12.5px; color: var(--ink); }
+.secret-env { font-size: 11px; color: var(--ink-dim); }
+
+/* keys & models (unified agent config) */
+.km-agent { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2); padding: 14px 16px; }
+.km-agent__head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.km-agent__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 620px) { .km-agent__grid { grid-template-columns: minmax(0, 1fr); } }
+.km-col { min-width: 0; }
+.km-saved { display: inline-flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--sage-ink); }
+
+/* reference intake */
+.reference__list { display: flex; flex-direction: column; gap: 6px; }
+.reference__item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); }
+
+/* ------------------------------------------------------------- Studio lanes */
+.studio-lane__head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.studio-lane__agent { font-size: 16px; }
+.gate button { cursor: pointer; }
+.ready { border-color: color-mix(in srgb, var(--sage) 34%, var(--line)); }
+.ready__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+.ready__item { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.ready__summary { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+
+/* ------------------------------------------------------------- Activity */
+.activity-live { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-dim); }
+.activity-live span { width: 7px; height: 7px; border-radius: 999px; background: var(--ink-faint); }
+.activity-live--on span { background: var(--sage); box-shadow: 0 0 6px color-mix(in srgb, var(--sage) 70%, transparent); }
+.activity-live--off span { background: var(--amber); }
+.log-thread { position: relative; margin: 0; padding: 0 0 0 20px; list-style: none; }
+.log-thread::before { content: ""; position: absolute; left: 5px; top: 4px; bottom: 4px; width: 0; border-left: 1.5px dashed var(--line-strong); }
+.log-row { position: relative; padding: 9px 0; }
+.log-row__knot { position: absolute; left: -19px; top: 14px; width: 9px; height: 9px; border-radius: 999px; background: var(--surface-3); border: 1.5px solid var(--ink-faint); }
+.log-row--sage .log-row__knot { border-color: var(--sage); background: var(--sage-wash); }
+.log-row--brass .log-row__knot { border-color: var(--brass); background: var(--brass-wash); }
+.log-row--amber .log-row__knot { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+.log-row--danger .log-row__knot { border-color: var(--danger); background: var(--danger-wash); }
+.log-row__top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.log-row__agent { font-size: 11.5px; color: var(--brass-ink); }
+.log-row__event { font-size: 12px; color: var(--ink); }
+.log-row__time { font-size: 10.5px; color: var(--ink-faint); margin-left: auto; }
+.log-row__msg { font-size: 13px; color: var(--ink-2); margin-top: 3px; overflow-wrap: anywhere; }
+.log-row__meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 10.5px; color: var(--ink-faint); min-width: 0; }
+.log-row__data { color: var(--ink-dim); overflow-wrap: anywhere; min-width: 0; }
+
+/* ---- Run-thread head (R6) — one card per run, its spine sews while live ---- */
+.run-thread__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.run-thread__agent { font-size: 12.5px; color: var(--brass-ink); }
+.run-thread__counts { font-size: 11px; color: var(--ink-2); }
+.run-thread__run { font-size: 10.5px; color: var(--ink-faint); }
+.run-thread__time { font-size: 10.5px; color: var(--ink-faint); margin-left: auto; }
+
+/* ---- Pulse ribbon (R6, §B) — floor vitals + throughput sparkline ---- */
+.pulse {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 12px 16px;
+  flex-wrap: wrap;
+}
+.pulse__stat { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.1; }
+.pulse__stat-n { font-size: 22px; color: var(--ink); }
+.pulse__stat-n--oxblood { color: var(--oxblood); }
+.pulse__stat-n--sage { color: var(--sage-ink); }
+.pulse__stat-n--danger { color: var(--danger); }
+.pulse__stat-n--brass { color: var(--brass-ink); }
+.pulse__stat-l {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-faint);
+  margin-top: 2px;
+}
+.pulse__spark { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.pulse__spark-svg { display: block; }
+.pulse__rate { font-size: 14px; color: var(--ink-2); }
+.pulse__rate-unit { font-size: 10px; color: var(--ink-faint); margin-left: 1px; }
+@media (max-width: 560px) {
+  .pulse { gap: 16px; }
+  .pulse__stat-n { font-size: 18px; }
+  .pulse__spark { margin-left: 0; }
+}
+
+/* ------------------------------------------------------------- Evals */
+.eval-stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+.eval-stat { padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; }
+.eval-stat__num { font-size: 32px; line-height: 0.95; color: var(--ink); font-variant-numeric: tabular-nums; }
+.eval-legend { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-dim); }
+.eval-legend__dot { width: 9px; height: 3px; border-radius: 2px; }
+.low-row { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.low-row:last-child { border-bottom: none; }
+.low-row__score { font-size: 22px; width: 44px; flex: none; text-align: center; }
+@media (max-width: 720px) { .eval-stat-row { grid-template-columns: repeat(2, 1fr); } }
+
+/* ---------------------------------------------------- The Cutting Bench
+   (Evals redesign) — filter bar, interactive legend, slice grid, Fix Queue,
+   FixCard, criterion readout, outcome slot. Reuses .mat/.eyebrow/.ui-badge/
+   .bp__criterion* + the tape/chalk vocabulary; no new motif. */
+.eval-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.eval-filters .ui-select-wrap { min-width: 140px; }
+.eval-filters__threshold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 200px;
+  min-width: 180px;
+  padding: 0 4px;
+}
+.eval-filters__threshold .ui-range { flex: 1; }
+.eval-filters__threshold .tnum { width: 26px; text-align: right; }
+
+.eval-legend--btn {
+  cursor: pointer;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  transition: border-color var(--dur) var(--ease), opacity var(--dur) var(--ease);
+}
+.eval-legend--btn:hover { border-color: var(--brass); }
+.eval-legend--btn:focus-visible { box-shadow: var(--focus-ring); outline: none; }
+.eval-legend--btn[aria-pressed="true"] { border-color: var(--brass); background: var(--brass-wash); }
+
+.eval-slice-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.eval-slice--active { border-color: color-mix(in srgb, var(--brass) 45%, var(--line-strong)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--brass) 30%, transparent); }
+
+/* Fix Queue — the ACT zone */
+.fix-queue__list { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
+.fix-queue__clean { padding: 6px 2px 2px; }
+
+.fix-card {
+  position: relative;
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.fix-card--working { border-color: color-mix(in srgb, var(--oxblood) 40%, var(--line-strong)); }
+.fix-card__rule { width: 4px; flex: none; align-self: stretch; }
+.fix-card__body { flex: 1; min-width: 0; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.fix-card__head { display: flex; align-items: flex-start; gap: 14px; }
+.fix-card__scorecol { flex: none; width: 64px; display: flex; flex-direction: column; gap: 4px; }
+.fix-card__score { font-size: 30px; line-height: 0.95; }
+.fix-card__meta { flex: 1; }
+.fix-card__criteria { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fix-card__criterion { padding: 4px 9px; }
+.fix-card__more {
+  font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+  background: none; border: 1px dashed var(--line-strong); border-radius: var(--r-sm);
+  padding: 4px 9px; cursor: pointer;
+}
+.fix-card__more:hover { color: var(--brass-ink); border-color: var(--brass); }
+.fix-card__notes { font-size: 11.5px; color: var(--ink-faint); margin: 0; overflow-wrap: anywhere; }
+.fix-card__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fix-card__working { display: flex; align-items: center; gap: 8px; }
+
+/* one-shot drill-down highlight — instant outline under reduced motion */
+.data-flash { animation: data-flash-pulse 0.9s var(--ease); }
+@keyframes data-flash-pulse {
+  0% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--brass) 70%, transparent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .data-flash { animation: none; outline: 2px solid var(--brass); outline-offset: 2px; }
+}
+
+/* per-criterion readout — TapeGauge stack, mirrors .bp__criterion rows */
+.criterion-readout { display: flex; flex-direction: column; gap: 6px; }
+.criterion-readout__row { display: grid; grid-template-columns: 150px 1fr 34px; align-items: center; gap: 10px; }
+.criterion-readout__gauge { min-width: 0; }
+
+/* §10.2 outcome slot — present, disabled, honest; ships phase 3 */
+.outcome-slot { border-style: dashed; opacity: 0.66; }
+.outcome-slot:hover { opacity: 0.66; }
+
+@media (max-width: 720px) {
+  .fix-card__head { flex-wrap: wrap; }
+  .criterion-readout__row { grid-template-columns: 110px 1fr 30px; }
+}
+
+/* ------------------------------------------------------------- Agent board
+   (Task 7) — the per-agent desk: identity dot, run groups, lane board,
+   item cards. Reuses producer__*, mat, tape/seam, and badge tokens; no new
+   motif. Gate colors: proposed=neutral, approved=sage, rejected=muted;
+   Failed=danger everywhere (Global Constraints). */
+.agent-dot {
+  width: 8px; height: 8px; border-radius: 999px; flex: none;
+  background: var(--ink-faint);
+}
+.agent-dot--live {
+  background: var(--oxblood);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--oxblood) 65%, transparent);
+}
+
+.run-group { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); overflow: hidden; }
+.run-group--live { border-color: color-mix(in srgb, var(--oxblood) 34%, var(--line)); }
+.run-group__head {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 14px; text-align: left; cursor: pointer;
+  background: var(--surface-2);
+}
+.run-group__head:hover { background: var(--surface-3); }
+.run-group__head .chev { color: var(--ink-faint); transition: transform var(--dur) var(--ease); flex: none; }
+.run-group__head .chev--open { transform: rotate(90deg); }
+.run-group__id { font-size: 12.5px; color: var(--ink-2); }
+.run-group__counts { margin-left: auto; font-size: 12px; color: var(--ink-dim); }
+.run-group__body { padding: 14px; border-top: 1px solid var(--line); }
+
+.wf-board {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.wf-lane { flex: 1 1 160px; min-width: 160px; display: flex; flex-direction: column; gap: 8px; }
+.wf-lane__head { display: flex; align-items: center; gap: 8px; }
+.wf-lane__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wf-lane__count { font-size: 11px; color: var(--ink-faint); }
+.wf-lane__items {
+  display: flex; flex-direction: column; gap: 6px;
+  min-height: 40px;
+  padding: 8px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--surface) 55%, transparent);
+  border: 1px dashed var(--line);
+}
+.wf-lane__empty { display: block; text-align: center; padding: 8px 0; opacity: 0.6; }
+
+.item-card {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 9px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.item-card:hover { border-color: var(--brass); transform: translateY(-1px); box-shadow: var(--shadow-1); }
+.item-card__id { flex: 1; min-width: 0; font-size: 11px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item-card__score { flex: none; }
+.item-card__dot { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+.item-card__dot--neutral { background: var(--ink-faint); }
+.item-card__dot--active { background: var(--oxblood); box-shadow: 0 0 5px color-mix(in srgb, var(--oxblood) 60%, transparent); }
+.item-card__dot--done { background: var(--sage); }
+.item-card__dot--approved { background: var(--sage-ink); }
+.item-card__dot--rejected { background: var(--ink-dim); opacity: 0.7; }
+.item-card__dot--failed { background: var(--danger); box-shadow: 0 0 5px color-mix(in srgb, var(--danger) 60%, transparent); }
+.item-card--rejected { opacity: 0.72; }
+.item-card--failed { border-color: color-mix(in srgb, var(--danger) 40%, var(--line-strong)); }
+.item-card--done, .item-card--approved { border-color: color-mix(in srgb, var(--sage) 34%, var(--line-strong)); }
+
+@media (max-width: 900px) {
+  .wf-board { flex-wrap: wrap; }
+  .wf-lane { flex: 1 1 45%; }
+}
+
+/* ------------------------------------------------------------- Discovery
+   (§11.4) — candidates pinned for review, the same tape/pin/chalk vocabulary
+   as everywhere else. No new motif: .gate/.ready reused verbatim from Studio;
+   .candidate-grid mirrors .proposal-grid's rhythm. */
+.candidate-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+.candidate__avatar {
+  display: grid; place-items: center; flex: none;
+  width: 34px; height: 34px; border-radius: 999px;
+  background: var(--surface-3); border: 1px solid var(--line-strong);
+  font-size: 14px; color: var(--brass-ink);
+}
+.candidate__handle { font-size: 15px; color: var(--ink); max-width: 100%; }
+.candidate__stats { display: flex; gap: 18px; }
+.candidate__stat { display: flex; flex-direction: column; gap: 2px; }
+.candidate__reasons { margin: 6px 0 0; padding-left: 1.1em; list-style: disc; }
+.candidate__reasons li { font-size: 12px; color: var(--ink-dim); line-height: 1.45; overflow-wrap: anywhere; }
+.candidate__samples { margin-top: 2px; }
+.candidate__sample {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px;
+  background: var(--surface-2); border: 1px solid var(--line);
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-dim);
+}
+.candidate__sample:hover { color: var(--brass-ink); border-color: color-mix(in srgb, var(--brass) 40%, var(--line)); }
+
+/* the cadence panel — the weekly-budget → daily → heartbeat plan + the
+   discovery_enabled kill-switch (§11.1), read straight off the agent config. */
+.cadence-panel { display: flex; flex-direction: column; gap: 10px; }
+.cadence-panel--off { border-color: color-mix(in srgb, var(--danger) 30%, var(--line)); }
+.cadence-panel__row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.cadence-panel__switch { display: flex; flex-direction: column; gap: 4px; }
+.cadence-panel__stats { display: flex; gap: 20px; flex-wrap: wrap; }
+.cadence-panel__stat { display: flex; flex-direction: column; gap: 2px; }
+.cadence-panel__posture { font-size: 12.5px; color: var(--ink-dim); margin: 0; max-width: 68ch; }
+
+/* ------------------------------------------------------------- responsive */
+@media (max-width: 1040px) { .stat-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 900px) {
+  .board__track { flex-direction: column; align-items: stretch; padding-left: 26px; }
+  .board__cell { flex-direction: column; }
+  .board__cell > .stage-node { width: 100%; }
+  /* stacked: no side gutter — the last node is full-width like the rest */
+  .board__cell:last-child > .stage-node { margin-right: 0; }
+  /* stacked: the connector is a short vertical tick between rows — reset the
+     desktop's horizontal 32px basis so it doesn't force a 32px-tall gap. */
+  .connector { flex: 0 0 18px; width: 2px; height: 18px; min-width: 0; align-self: center; }
+  .tape-spine { display: none; }
+  /* the Playbook's own lift ruler must survive the stack — it is the header's
+     honestly-labeled scale, not the Board's decorative spine (higher specificity
+     so it beats the hide rule regardless of source order). */
+  .tape-spine.playbook-ruler { display: block; }
+  /* horizontal tape becomes a vertical rail down the stacked pipeline */
+  .board__live-tiles { gap: 10px; }
+  .board__vtape {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 64px;
+    bottom: 6px;
+    width: 16px;
+    border-radius: var(--r-sm);
+    background: linear-gradient(90deg,
+      color-mix(in srgb, var(--brass) 12%, var(--surface-2)), var(--surface-2));
+    border: 1px solid var(--line-strong);
+    box-shadow: inset 1px 0 0 color-mix(in srgb, #fff 8%, transparent);
+    background-image: repeating-linear-gradient(180deg,
+      color-mix(in srgb, var(--ink) 18%, transparent) 0 1px, transparent 1px 12px);
+    background-repeat: repeat-y;
+    background-position: right 3px top 0;
+    background-size: 7px 12px;
+    pointer-events: none;
+  }
+}
+@media (max-width: 560px) {
+  .stat-row { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat-tile__num { font-size: 32px; }
+  .reel-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .weight-row { grid-template-columns: 110px 1fr 44px; gap: 8px; }
+  .next-step { flex-direction: column; align-items: stretch; }
+  .cadence-panel__row { flex-direction: column; align-items: flex-start; }
+}
+
+/* ------------------------------------------------------------- Studio renders
+   The post-by-hand surface, in the Corpus swatch's visual language: a grid of
+   compact 9:16 towers. Everything structural — the mat, the media box, the
+   scrim, the overlay chips, the meta band — is borrowed verbatim from
+   .reel-card*; only what a POST KIT needs and a corpus clip does not is
+   defined here. */
+
+/* .reel-grid's minmax(230px, 1fr) lets a card stretch past 340px, which on a
+   9:16 tower is a 600px-tall media box. A tower needs an upper bound; a 3:4
+   card does not — hence a separate container rather than reusing .reel-grid. */
+.render-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 264px));
+  justify-content: start;
+  align-items: start;
+  gap: 16px;
+}
+@media (max-width: 560px) {
+  .render-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+}
+
+/* load-bearing: without it a long title sets the grid item's base size and
+   widens the column instead of truncating inside it. */
+.render-swatch { min-width: 0; }
+
+/* The open gesture. Corpus makes the whole article role="button"; this card
+   nests a copy button, an anchor and a CTA, which ARIA forbids inside one — so
+   the hit target is confined to the MEDIA. That is also why nothing in the meta
+   band needs stopPropagation. No background: it must not paint over the poster. */
+.render-swatch__hit {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  appearance: none;
+}
+.render-swatch__hit:focus-visible { outline: 2px solid var(--brass); outline-offset: -2px; }
+
+/* Two inset state rings over the shared .reel-card__placeholder, replacing the
+   eight bespoke plate rules the wide card used to carry. */
+.render-swatch__plate--working { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--oxblood) 40%, transparent); }
+.render-swatch__plate--working .reel-card__monogram { color: var(--oxblood-ink); opacity: 0.8; }
+.render-swatch__plate--error { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent); }
+.render-swatch__plate--error .reel-card__monogram { color: var(--danger); opacity: 0.8; }
+/* the modal's no-media column: a positioning context for the inset plate,
+   still sized by width from the record's own ratio */
+.render-swatch__plate-box { position: relative; width: 100%; }
+
+/* The overlay title is #f4efe4 with a shadow so it survives a bright frame —
+   but over the placeholder there is no frame beneath it, and in light theme it
+   vanishes. Swap to the ink ramp when there is no media. */
+.render-swatch__creator--plate { color: var(--ink); }
+.render-swatch__creator--plate .name { text-shadow: none; }
+.render-swatch__creator--plate .sub { color: var(--ink-dim); }
+
+/* Determinate progress on the media's foot, sitting on the scrim's dark ramp.
+   "frame 3/6" is unreadable across a grid of towers; a filling hairline is not.
+   Theme-invariant colours, matching the on-media overlay convention. */
+.render-swatch__bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  z-index: 3;
+  background: color-mix(in srgb, #000 42%, transparent);
+  overflow: hidden;
+}
+.render-swatch__bar > i { display: block; height: 100%; background: var(--brass-metal); transition: width 0.3s var(--ease); }
+/* Unknown progress: a sliver travelling the rail, never a full bar (which reads as done).
+   Same 0.7s cadence as the board's stitch-travel packet. */
+.render-swatch__bar--indeterminate > i { width: 38%; transition: none; animation: render-bar-travel 1.15s var(--ease) infinite; }
+@keyframes render-bar-travel {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(363%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .render-swatch__bar--indeterminate > i { animation: none; width: 38%; }
+}
+
+/* The compact sound strip: a glyph plus a truncating two-line stack. The
+   .audio-card equivalents are 15px and wrap where this must truncate. */
+.render-swatch__sound { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; }
+.render-swatch__sound-glyph {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: var(--r-sm);
+  background: var(--brass-metal);
+  color: #241a08;
+  box-shadow: var(--bevel);
+}
+.render-swatch__sound-title { font-size: 12.5px; color: var(--ink-2); line-height: 1.25; }
+.render-swatch__sound-artist { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-dim); }
+
+/* Corpus swatches carry no actions; this one ends in a full-width CTA. */
+.render-swatch__act { display: flex; padding-top: 2px; }
+.render-swatch__cta { box-shadow: var(--bevel), 0 0 0 1px color-mix(in srgb, var(--brass) 30%, transparent); }
+
+/* The cost confirm lives ON the media, not in the band: a 30px sm-button
+   cannot hold a price, a frame count and a cancellation warning at 220px wide,
+   and arming it must not change the card's height. The media box donates a
+   ~220×390 canvas that is already the right shape. */
+.render-swatch__confirm {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 14px;
+  text-align: center;
+  background: color-mix(in srgb, #000 72%, transparent);
+  backdrop-filter: blur(6px);
+  color: #f4efe4;
+}
+.render-swatch__cost { font-size: 30px; line-height: 1; }
+.render-swatch__cost-note { font-size: 11px; opacity: 0.85; }
+.render-swatch__cost-warn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--amber) 70%, #f4efe4);
+}
+.render-swatch__confirm-actions { display: flex; flex-direction: column; gap: 6px; width: 100%; margin-top: 2px; }
+
+/* ---- modal-only ---- */
+
+/* The one reason to touch modal CSS: .modal__media video ships max-height:88vh,
+   which is exactly the height cap that letterboxes a 9:16 clip on a short
+   viewport. Height:auto keeps the player width-driven end to end and lets the
+   black column scroll instead. The track width arrives as a CSS VAR set inline
+   from the record's ratio, never as an inline grid-template-columns — that is
+   what lets the 720px query below re-point it. */
+.modal--render {
+  --render-media-track: minmax(300px, 400px);
+  grid-template-columns: var(--render-media-track) 1fr;
+}
+/* align-self (not align-items) is what shrink-wraps the BLACK PANEL itself to
+   the player: the base .modal row is `minmax(0,1fr)` and stretches every child
+   to the height of the taller text column, which left a dead black band under a
+   9:16 clip. Capped at the modal's own 88vh so a tall clip still scrolls. */
+.modal__media--render {
+  align-items: start;
+  align-self: start;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+.modal__media--render video { width: 100%; height: auto; max-height: none; object-fit: contain; }
+
+@media (max-width: 720px) {
+  /* grid-template-columns must be re-declared here, not just the var: swapping
+     --render-media-track to 1fr still resolves to `1fr 1fr`, i.e. TWO tracks,
+     so the modal stayed side-by-side on phones. */
+  .modal--render {
+    --render-media-track: 1fr;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .modal__media--render { max-height: none; align-self: stretch; }
+  .modal__media--render video { width: min(300px, 70%); margin-inline: auto; }
+}
+
+/* A scrolling cap on a LOG, not on media — the job tail is unbounded output. */
+.render-swatch__tail {
+  font-family: var(--font-mono); font-size: 10.5px; line-height: 1.5;
+  color: var(--ink-dim); white-space: pre-wrap; word-break: break-word;
+  max-height: 120px; overflow-y: auto; margin: 0;
+  padding: 8px; border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--danger) 5%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line));
+}
+
+.render-swatch__spec {
+  font-size: 11px; color: var(--ink-dim);
+  padding: 6px 8px; border-radius: var(--r-sm);
+  background: var(--surface-2); border: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.render-swatch__muted { font-size: 12.5px; color: var(--ink-faint); }
+
+.render-swatch__frames { display: grid; gap: 6px; font-family: var(--font-mono); font-size: 11px; margin: 0; padding: 0; list-style: none; }
+.render-swatch__frames li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+.render-swatch__ost { color: var(--ink-dim); white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 3px; }
+
+.render-swatch__path { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.render-swatch__path code {
+  flex: 1; min-width: 0;
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-dim);
+  padding: 5px 7px; border-radius: var(--r-sm);
+  background: var(--surface-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; text-align: left; /* keep the filename visible, elide the prefix */
+}
+/* Isolate the path back to LTR inside the rtl box, so the leading "/" is not
+   bidi-reordered onto the end (which makes the file look like a directory). */
+.render-swatch__path code bdi { direction: ltr; unicode-bidi: isolate; }
+
+.render-swatch__foot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: auto; padding-top: 12px; border-top: 1px solid var(--line);
+}

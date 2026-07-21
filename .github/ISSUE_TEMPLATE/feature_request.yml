@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest an idea or enhancement
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - ReelScraper (hub / scraper)
+        - AnalysisEngine
+        - AutoSearch
+        - SimilarContent / producer
+        - Dashboard
+        - New producer (via _producer-template)
+        - Docs / CI / tooling
+        - Cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: The motivation or use case. What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you'd like to see. Keep the HTTP-hub boundary in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

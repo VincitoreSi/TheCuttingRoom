@@ -1,0 +1,19 @@
+# pages.txt — the handpicked creators this platform scrapes.
+#
+#   cp pages.txt.example pages.txt      then replace the samples below.
+#
+# The real pages.txt is gitignored on purpose: a targeting list is real personal
+# data about real creators, and it is the one file in this repo most likely to be
+# committed by accident.
+#
+# Format: one creator per line. Blank lines and lines starting with # are skipped.
+# A full profile URL or a bare handle both work.
+#
+# The handles below are SYNTHETIC placeholders (they are not real accounts) — the
+# scraper will find nothing until you swap in creators from your own niche. To grow
+# this list automatically instead of by hand, run the AutoSearch discovery agent and
+# approve its candidates in the Dashboard; the hub appends approved handles here.
+
+https://www.instagram.com/example.fashion.daily
+https://www.instagram.com/example.streetstyle
+https://www.instagram.com/example.outfitgrid

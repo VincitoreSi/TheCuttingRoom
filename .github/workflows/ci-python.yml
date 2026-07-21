@@ -1,0 +1,76 @@
+name: CI Python
+
+on:
+  push:
+    paths:
+      - "ReelScraper/**"
+      - "AnalysisEngine/**"
+      - "AutoSearch/**"
+      - "SimilarContent/**"
+      - ".github/workflows/ci-python.yml"
+  pull_request:
+    paths:
+      - "ReelScraper/**"
+      - "AnalysisEngine/**"
+      - "AutoSearch/**"
+      - "SimilarContent/**"
+      - ".github/workflows/ci-python.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.component }} (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [ReelScraper, AnalysisEngine, AutoSearch, SimilarContent]
+        python-version: ["3.10", "3.12"]
+    defaults:
+      run:
+        working-directory: ${{ matrix.component }}
+    env:
+      # Ensure live smoke tests remain skipped in CI.
+      RUN_LIVE_SMOKE: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39  # v3
+        with:
+          enable-cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # SimilarContent's frame-assembly tests really do shell out to ffmpeg. They are
+      # guarded by `pytest.mark.skipif(not ffmpeg_available())`, so CI would stay green
+      # without this — it would just silently skip the ~13 tests that cover the stitch
+      # path. Install it so they actually run.
+      - name: Install ffmpeg (SimilarContent stitch tests)
+        if: matrix.component == 'SimilarContent'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Ruff (if configured)
+        run: |
+          if grep -q "tool.ruff" pyproject.toml 2>/dev/null || [ -f ruff.toml ] || [ -f .ruff.toml ]; then
+            uv run ruff check .
+          else
+            echo "No ruff config found; skipping ruff."
+          fi
+
+      - name: Pytest (offline unit tests; live smoke skipped)
+        run: |
+          uv run python -m pytest -q || [ $? -eq 5 ]

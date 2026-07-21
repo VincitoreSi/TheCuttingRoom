@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <!-- Safari does not reliably render an SVG favicon, so the raster fallbacks are not
+         optional. Order matters: browsers pick the LAST type they understand, so the SVG
+         is declared after the PNG for Chrome/Firefox, while `shortcut icon` (.ico) and
+         the 32px PNG are what Safari actually uses. /favicon.ico is also requested
+         implicitly, whatever is declared here. -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <title>The Cutting Room · Virality Studio</title>
+    <meta name="description" content="Local control board for the content-virality pipeline — mine, measure, and craft viral Reels." />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

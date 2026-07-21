@@ -1,0 +1,22 @@
+# python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# secrets — never commit; env-var NAMES are documented in .env.example
+.env
+session.txt
+
+# resume caches (per-run scraped raw profiles — may contain public-but-volatile data)
+*_raw.json
+
+# per-run logs (named by start_time)
+logs/
+
+# cadence state — deterministic/regenerable from config; never worth diffing/committing
+memory/plan.json
+memory/caps/
+
+.DS_Store

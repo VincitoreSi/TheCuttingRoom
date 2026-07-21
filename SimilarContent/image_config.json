@@ -1,0 +1,53 @@
+{
+  "active": "nano_banana",
+  "_comment": "Swap `active` to any provider key below to change image backends. Each frame is vertical short-form: default 9:16. The agent reads the key from `api_key_env`; never hardcode secrets here.",
+  "defaults": {
+    "aspect_ratio": "9:16",
+    "width": 768,
+    "height": 1344
+  },
+  "providers": {
+    "nvidia_nim": {
+      "label": "NVIDIA NIM — FLUX.1-dev  [VERIFIED WORKING 2026-07-18]",
+      "api_key_env": "NVIDIA_API_KEY",
+      "endpoint": "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev",
+      "model": "black-forest-labs/flux.1-dev",
+      "headers": {"Accept": "application/json", "Content-Type": "application/json"},
+      "request_body": {
+        "prompt": "<frame prompt>",
+        "mode": "base",
+        "cfg_scale": 3.5,
+        "width": 768,
+        "height": 1344,
+        "seed": 0,
+        "steps": 30
+      },
+      "verified_sizes": ["768x1344 (9:16)", "832x1216 (2:3)", "1024x1024 (1:1)"],
+      "response_path": "artifacts[0].base64",
+      "response_format": "JPEG (base64) — decode and save as .jpg",
+      "CRITICAL": "The `mode` field is MANDATORY. Omitting it makes the request HANG with no response (no error). Always send \"mode\":\"base\". Send the body via a file (--data @body.json) to avoid shell-quoting JSON errors.",
+      "note": "flux.1-dev confirmed working with the user's key on 2026-07-18 (~10s/image, ~768x1344). schnell endpoint hung in testing — stick with dev. steps 20-50; higher = more fidelity, more time/credits."
+    },
+    "nano_banana": {
+      "label": "Google Gemini 2.5 Flash Image (Nano Banana)",
+      "api_key_env": "GEMINI_API_KEY",
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
+      "model": "gemini-2.5-flash-image",
+      "note": "~$0.04/image if billing enabled; free tier is rate-limited. Best for photoreal + tight prompt adherence and multi-frame subject consistency."
+    },
+    "pollinations": {
+      "label": "Pollinations.ai (keyless fallback for testing)",
+      "api_key_env": null,
+      "endpoint": "https://image.pollinations.ai/prompt/{url_encoded_prompt}?width=768&height=1344&nologo=true",
+      "model": "flux",
+      "note": "No key, free, rate-limited. GET the URL to receive the PNG. Use for smoke tests before spending NIM credits."
+    },
+    "huggingface": {
+      "label": "Hugging Face Inference API (FLUX/SDXL)",
+      "api_key_env": "HF_TOKEN",
+      "endpoint": "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+      "model": "black-forest-labs/FLUX.1-schnell",
+      "note": "Free tier, rate-limited; returns raw image bytes."
+    }
+  }
+}

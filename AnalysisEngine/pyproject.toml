@@ -1,0 +1,30 @@
+[project]
+name = "analysis-engine"
+version = "1.0.0"
+description = "AnalysisEngine — Gemini-powered short-form-video analyzer that produces the canonical schema_version 2 blueprint and writes it to the pipeline hub over HTTP."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "jsonschema>=4.21",
+    "yt-dlp>=2024.1",
+]
+
+[project.scripts]
+analysis-engine = "cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["cli"]
+packages = ["engine"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live_smoke: hits a running hub / real API keys; skipped unless RUN_LIVE_SMOKE=1",
+]

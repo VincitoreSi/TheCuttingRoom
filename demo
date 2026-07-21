@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+#
+# ./demo — launch with the pre-filled sample dataset, so every view has content.
+#
+#   ./demo                 unpack + load the dataset, set up if needed, launch
+#   ./demo --keep          launch without overwriting data already on disk
+#   ./demo --port 9000     prefer a specific port
+#
+# The dataset is NOT in this repo — it ships separately as demodataset.zip (real scraped
+# content, shared privately). Put that zip in the repo root and ./demo unpacks it into
+# demo-data/data/, copies it over the working tree, and starts the hub, so the Corpus grid,
+# the Studio gate, the rendered reels, the evals and the activity log are all populated.
+# With no dataset and no zip, ./demo stops and explains how to get one (or use ./init).
+#
+# Instant and offline: no API keys, no scraping, no model calls.
+#
+# This OVERWRITES generated data (corpus, studio, renders, evals, logs). It never touches
+# source code or your .env files. Use ./init for a clean, empty start instead.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common.sh
+. "$ROOT/scripts/_common.sh"
+
+DEMO_DATA="$ROOT/demo-data/data"
+KEEP=0; PREFERRED_PORT=8787
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --keep)    KEEP=1 ;;
+    --port)    PREFERRED_PORT="${2:?--port needs a number}"; shift ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)         die "unknown option: $1 (try --help)" ;;
+  esac
+  shift
+done
+
+printf '\n  %sThe Cutting Room%s · demo\n' "$_B" "$_R"
+
+# -------------------------------------------------------------- resolve the dataset
+# This is the shareable build: the real scraped dataset does NOT live in the repo. It
+# travels separately as demodataset.zip. Resolve it in three steps:
+#   1. already unpacked (demo-data/data has files)  -> use it
+#   2. demodataset.zip sitting in the repo root     -> unpack it, then use it
+#   3. neither                                      -> explain both ways forward, then stop
+# True only when real data is present. The shared build ships demo-data/data/ holding just
+# a .gitkeep marker, so an "is it non-empty" test would wrongly report a dataset — ignore it.
+dataset_ready() {
+  [ -d "$DEMO_DATA" ] || return 1
+  [ -n "$(ls -A "$DEMO_DATA" 2>/dev/null | grep -vx '.gitkeep')" ]
+}
+
+if ! dataset_ready && [ -f "$ROOT/demodataset.zip" ]; then
+  step "Unpacking demodataset.zip"
+  have unzip || die "unzip is required to unpack demodataset.zip (brew install unzip, or apt install unzip)"
+  unzip -q -o "$ROOT/demodataset.zip" -d "$ROOT" || die "could not unpack demodataset.zip"
+  ok "demo dataset unpacked into demo-data/"
+fi
+
+if ! dataset_ready; then
+  printf '\n'
+  warn "no demo dataset found — this is the clean, shareable build"
+  say "The real scraped dataset ships separately as ${_B}demodataset.zip${_R} (ask whoever"
+  say "shared this repo). To load it:"
+  say "  1. put ${_B}demodataset.zip${_R} in this folder:"
+  say "     ${_D}$ROOT${_R}"
+  say "  2. re-run ${_B}./demo${_R}"
+  printf '\n'
+  say "Or start empty and build your own dataset instead:"
+  say "  1. ${_B}./init${_R}"
+  say "  2. add creator handles to ${_B}ReelScraper/platforms/instagram/pages.txt${_R}"
+  say "  3. run the pipeline from the Board (scrape → analyze → media → blueprints)"
+  printf '\n'
+  exit 1
+fi
+
+# ---------------------------------------------------------------- 1. prerequisites
+step "Checking prerequisites"
+require uv   "the hub is uv-managed" "https://docs.astral.sh/uv/"
+check_python
+require curl "readiness checks"
+if [ -d "$ROOT/ReelScraper/frontend/dist" ]; then
+  ok "Dashboard already built"
+else
+  check_node; require npm "the Dashboard build"
+fi
+
+# ---------------------------------------------------------------- 2. dependencies
+if [ ! -d "$ROOT/ReelScraper/.venv" ] || [ ! -d "$ROOT/ReelScraper/frontend/dist" ]; then
+  step "First run — installing dependencies"
+  sync_python_projects
+  build_dashboard
+fi
+
+# ---------------------------------------------------------------- 3. the dataset
+step "Loading the demo dataset"
+if [ "$KEEP" -eq 1 ]; then
+  warn "--keep: leaving existing data alone"
+else
+  # cp -R rather than rsync: rsync is not guaranteed present, and demo-data/data mirrors
+  # the repo layout exactly, so a plain recursive merge-over is all that is needed.
+  ( cd "$DEMO_DATA" && find . -mindepth 1 -maxdepth 1 -exec cp -R {} "$ROOT/" \; )
+  if [ -f "$ROOT/demo-data/manifest.json" ]; then
+    python3 - "$ROOT/demo-data/manifest.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1])); c = m.get("corpus", {})
+n_bp = m.get("analyzed_reels") or m.get("cloned_reels_with_source_video") or "?"
+print(f"    ✓ {c.get('reels','?')} reels · {c.get('creators','?')} creators · "
+      f"{n_bp} cloned · {m.get('total_bytes',0)/1e6:.0f}MB")
+PY
+  else
+    ok "dataset copied into place"
+  fi
+fi
+
+# ---------------------------------------------------------------- 4. launch
+step "Starting the hub"
+URL="http://127.0.0.1:$PREFERRED_PORT"
+if hub_responding "$URL"; then
+  ok "a hub is already serving on $URL — reusing it"
+  warn "it started before the dataset was copied; restart it if views look stale"
+else
+  PORT="$(free_port "$PREFERRED_PORT")"
+  [ "$PORT" = "$PREFERRED_PORT" ] || warn "port $PREFERRED_PORT is busy — using $PORT"
+  start_hub "$PORT"; URL="$HUB_URL"
+  ok "hub up"
+fi
+
+open_browser "$URL"
+banner "$URL" "Ready — a studio with work in it."
+say "${_D}Corpus${_R}  scored reels, with blueprints on the analyzed clips"
+say "${_D}Studio${_R}  clone recipes at the human gate, and rendered reels that play inline"
+say "${_D}Evals${_R}   self-eval scores from the analysis runs"
+printf '\n'
+warn "this dataset is real scraped data — read demo-data/README.md before publishing"
+printf '\n'

@@ -1,0 +1,30 @@
+[project]
+name = "auto-search"
+version = "1.0.0"
+description = "AutoSearch — the pipeline's discovery agent: finds new Instagram creators worth scraping, scores them for niche-fit (heuristics + Claude), and proposes them to the hub for human approval into pages.txt."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "anthropic>=0.68",
+    "jsonschema>=4.21",
+]
+
+[project.scripts]
+auto-search = "cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["cli"]
+packages = ["engine"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live_smoke: hits a running hub / real API keys; skipped unless RUN_LIVE_SMOKE=1",
+]

@@ -1,0 +1,17 @@
+[project]
+name = "producer-template"
+version = "0.1.0"
+description = "Producer agent template — a starter scaffold (structured logging via logsetup + hub self-registration) for building a new pipeline producer against the Producer SPI."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["logsetup"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

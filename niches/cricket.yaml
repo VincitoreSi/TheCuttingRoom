@@ -1,0 +1,79 @@
+# niches/cricket.yaml — example niche: Cricket.
+# Like football, cricket clips are velocity-driven around live moments (a six, a wicket),
+# but reach spikes are heavily event-driven (IPL / World Cup), so reach stays strong while
+# velocity is lifted above the Fashion default. See niches/fashion.yaml for the schema.
+
+niche: Cricket
+
+platforms:
+
+  instagram:
+    reels_per_creator: 250
+    discovery:
+      keywords:
+        - cricket
+        - batting
+        - bowling
+        - cricket highlights
+        - ipl
+        - cricket skills
+        - yorker
+        - six
+        - cricket edits
+        - test cricket
+        - t20
+        - cricket fan
+        - wicket
+        - cover drive
+        - gully cricket
+      seeds: []
+    weights:
+      reach_multiplier: 0.32
+      outlier_score: 0.25
+      engagement_rate: 0.20
+      velocity: 0.23
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@example.cricket.edits"
+      - "@example.batting.clips"
+      - "@example.ipl.moments"
+      - "@example.gully.cricket"
+
+  x:
+    posts_per_creator: 200
+    # Ball-by-ball reactions repost fast during live matches — velocity leads on X.
+    weights:
+      reach_multiplier: 0.28
+      outlier_score: 0.22
+      engagement_rate: 0.20
+      velocity: 0.30
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@ex_cricket_1"
+      - "@ex_cricket_hl"
+      - "@ex_ipl_daily"
+
+  youtube:
+    shorts_per_creator: 200
+    weights:
+      reach_multiplier: 0.38
+      outlier_score: 0.30
+      engagement_rate: 0.15
+      velocity: 0.17
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@example.cricket.shorts"
+      - "@example.bowling.clips"
+      - "@example.sixes.tv"

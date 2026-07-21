@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+#
+# ./init — set the project up from a clean clone and launch it, with no data.
+#
+#   ./init                 check, install, configure, launch
+#   ./init --no-launch     set everything up but don't start the hub
+#   ./init --reset         wipe any existing generated data first (asks before deleting)
+#   ./init --port 9000     prefer a specific port
+#
+# You end up on an empty dashboard: no corpus, no proposals, no renders. That is the
+# point — this is the first-run path for someone who will scrape their own niche.
+# For a populated dashboard to look around in, use `./demo` instead.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common.sh
+. "$ROOT/scripts/_common.sh"
+
+LAUNCH=1; RESET=0; PREFERRED_PORT=8787
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-launch) LAUNCH=0 ;;
+    --reset)     RESET=1 ;;
+    --port)      PREFERRED_PORT="${2:?--port needs a number}"; shift ;;
+    -h|--help)   sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)           die "unknown option: $1 (try --help)" ;;
+  esac
+  shift
+done
+
+printf '\n  %sThe Cutting Room%s · first-run setup\n' "$_B" "$_R"
+
+# ---------------------------------------------------------------- 1. prerequisites
+step "Checking prerequisites"
+require uv     "every Python component is uv-managed" "https://docs.astral.sh/uv/"
+check_python
+check_node
+require npm    "the Dashboard build"
+require curl   "readiness checks"
+optional git    "niche scaffolding and identity scripts"
+optional ffmpeg "video rendering will not work (SimilarContent stitches reels with it)" "brew install ffmpeg"
+
+# ---------------------------------------------------------------- 2. clean slate
+GENERATED=(
+  "ReelScraper/platforms/instagram/content.json"
+  "ReelScraper/media" "ReelScraper/renders" "ReelScraper/analysis"
+  "ReelScraper/studio/instagram" "ReelScraper/evals" "ReelScraper/logs"
+  "ReelScraper/producers" "ReelScraper/discovery" "ReelScraper/config/agents"
+)
+existing=()
+for p in "${GENERATED[@]}"; do
+  [ -e "$ROOT/$p" ] && [ -n "$(ls -A "$ROOT/$p" 2>/dev/null || echo x)" ] && existing+=("$p")
+done
+
+if [ ${#existing[@]} -gt 0 ]; then
+  step "Existing data found"
+  for p in "${existing[@]}"; do
+    printf '    %-46s %s\n' "$p" "$(du -sh "$ROOT/$p" 2>/dev/null | cut -f1)"
+  done
+  if [ "$RESET" -eq 1 ]; then
+    printf '\n'
+    warn "scraped media is NOT recoverable — re-downloading it means re-scraping."
+    say  "${_D}./demo restores only the curated subset in demo-data/, not everything above.${_R}"
+    if [ -t 0 ]; then
+      printf '\n    %sDelete all of it and start empty? [y/N]%s ' "$_Y" "$_R"; read -r ans
+    else
+      # --reset is itself the opt-in, but say plainly what is about to happen.
+      warn "non-interactive --reset: deleting without a prompt"
+      ans=y
+    fi
+    case "$ans" in
+      [yY]*) for p in "${existing[@]}"; do rm -rf "${ROOT:?}/$p"; done; ok "reset to empty" ;;
+      *)     warn "kept — nothing deleted" ;;
+    esac
+  else
+    warn "left in place. Re-run with --reset to start genuinely empty."
+  fi
+fi
+
+# ---------------------------------------------------------------- 3. dependencies
+step "Installing dependencies"
+sync_python_projects
+build_dashboard
+
+# ---------------------------------------------------------------- 4. configuration
+step "Configuration"
+say "Secrets live in gitignored per-agent .env files, by name. The hub never stores a"
+say "secret value — it only ever reports whether one is present."
+printf '\n'
+
+# The Gemini key is used by two agents, each reading its own .env — so it is stored in both.
+GEMINI_FILES=("$ROOT/AnalysisEngine/.env" "$ROOT/SimilarContent/.env")
+
+# Prefer a key that already exists over asking again. Once ./init has saved one, a later run
+# finds it here and never re-prompts. Look at the environment first — that is what a run
+# actually sees — then the per-agent .env files a previous run wrote.
+EXISTING_GEMINI="${GEMINI_API_KEY:-}"; GEMINI_SRC="the environment (\$GEMINI_API_KEY)"
+if [ -z "$EXISTING_GEMINI" ]; then
+  for f in "${GEMINI_FILES[@]}"; do
+    v="$(read_key GEMINI_API_KEY "$f")"
+    [ -n "$v" ] && { EXISTING_GEMINI="$v"; GEMINI_SRC="${f#"$ROOT"/}"; break; }
+  done
+fi
+
+if [ -n "$EXISTING_GEMINI" ]; then
+  ok "Gemini key already set in ${GEMINI_SRC} — reusing it (not asking again)"
+  # Show every place it is stored, so removing it by hand is unambiguous.
+  saved=()
+  for f in "${GEMINI_FILES[@]}"; do [ -n "$(read_key GEMINI_API_KEY "$f")" ] && saved+=("${f#"$ROOT"/}"); done
+  if [ ${#saved[@]} -gt 0 ]; then
+    say "${_D}to remove it, delete the GEMINI_API_KEY line from:${_R}"
+    for s in "${saved[@]}"; do say "${_D}  $s${_R}"; done
+  fi
+  # Re-verify quietly; only speak up if the saved key has since been revoked or run dry.
+  printf '    re-checking it with Google… '
+  if GEMINI_API_KEY="$EXISTING_GEMINI" python3 "$ROOT/scripts/check-keys.py" --only gemini --quiet; then
+    printf '%s✓%s\n' "$_G" "$_R"
+  else
+    printf '%s✗%s\n' "$_E" "$_R"
+    warn "the saved key no longer works — replace it in the file(s) above, or"
+    say  "  clear it and re-run ./init to enter a new one"
+  fi
+else
+  GEMINI="$(prompt_secret GEMINI_API_KEY 'Gemini API key — blueprints, captions, image rendering')"
+  if [ -n "$GEMINI" ]; then
+    # Verify BEFORE writing it anywhere. A key that is merely present looks identical to one
+    # that works until an agent finally uses it — which for the render path is after a
+    # blueprint has already been paid for. Checking here costs nothing and answers now.
+    printf '    checking the key with Google… '
+    if GEMINI_API_KEY="$GEMINI" python3 "$ROOT/scripts/check-keys.py" --only gemini --quiet; then
+      printf '%s✓%s\n' "$_G" "$_R"
+    else
+      printf '%s✗%s\n' "$_E" "$_R"
+      GEMINI_API_KEY="$GEMINI" python3 "$ROOT/scripts/check-keys.py" --only gemini || true
+      warn "saving it anyway — the check may just be offline; re-check with: python3 scripts/check-keys.py"
+    fi
+    # Written in both cases: making someone re-paste a key they already typed is worse than
+    # a warning, and an offline machine is a check failure, not a bad key.
+    for f in "${GEMINI_FILES[@]}"; do write_key GEMINI_API_KEY "$GEMINI" "$f"; done
+    say "${_D}saved — future ./init runs reuse it. To remove it, delete the GEMINI_API_KEY"
+    say "${_D}line from AnalysisEngine/.env and SimilarContent/.env.${_R}"
+  else
+    warn "skipped — without it the AnalysisEngine cannot write blueprints and"
+    say  "  SimilarContent cannot render or caption. Add it later to:"
+    say  "    AnalysisEngine/.env  and  SimilarContent/.env"
+  fi
+fi
+printf '\n'
+say "${_D}Optional, skippable:${_R}"
+say "  ANTHROPIC_API_KEY → AutoSearch/.env      (creator discovery)"
+say "  NVIDIA_API_KEY    → SimilarContent/.env  (FLUX image provider; Gemini is the default)"
+say "  See each component's .env.example for the full list."
+
+for p in AnalysisEngine AutoSearch SimilarContent; do
+  [ -f "$ROOT/$p/.env" ] || { [ -f "$ROOT/$p/.env.example" ] && cp "$ROOT/$p/.env.example" "$ROOT/$p/.env" && ok "seeded $p/.env from its example"; }
+done
+
+# Sweep everything now on disk — this also catches keys set in the environment or pasted
+# into a .env by hand, which the prompt above never sees.
+step "Verifying credentials"
+python3 "$ROOT/scripts/check-keys.py" || true
+
+# ---------------------------------------------------------------- 5. launch
+if [ "$LAUNCH" -eq 0 ]; then
+  step "Setup complete"
+  say "Start it when you're ready:  ./init   (or: cd ReelScraper && uv run cli.py start)"
+  printf '\n'; exit 0
+fi
+
+step "Starting the hub"
+URL="http://127.0.0.1:$PREFERRED_PORT"
+if hub_responding "$URL"; then
+  ok "a hub is already serving on $URL — reusing it"
+else
+  PORT="$(free_port "$PREFERRED_PORT")"
+  [ "$PORT" = "$PREFERRED_PORT" ] || warn "port $PREFERRED_PORT is busy — using $PORT"
+  start_hub "$PORT"; URL="$HUB_URL"
+  ok "hub up"
+fi
+
+open_browser "$URL"
+banner "$URL" "Ready — an empty studio."
+say "${_D}Next:${_R}"
+say "${_D}  1. add creator handles to ReelScraper/platforms/instagram/pages.txt${_R}"
+say "${_D}  2. run the pipeline from the Board (scrape → analyze → media → blueprints)${_R}"
+say "${_D}  3. cd SimilarContent && uv run cli.py propose --platform instagram${_R}"
+printf '\n'
+say "${_D}Just want to look around? ./demo loads a populated dataset instead.${_R}"
+printf '\n'

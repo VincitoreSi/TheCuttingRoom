@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#
+# ./docsite — build and serve the documentation site.
+#
+#   ./docsite              build, then serve with live reload and open a browser
+#   ./docsite --build      build only, into documentation/site
+#   ./docsite --port 9000  prefer a specific port
+#
+# mkdocs is not a standalone install here: it lives in ReelScraper's dev dependency group,
+# so everything runs through `uv run --project ReelScraper`. Nothing to install first.
+#
+# Building also lights up the hub's own /documentation route — it mounts
+# documentation/site when that directory exists, but only checks at startup, so restart
+# the hub after a first build.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common.sh
+. "$ROOT/scripts/_common.sh"
+
+CFG="$ROOT/documentation/mkdocs.yml"
+BUILD_ONLY=0; PREFERRED_PORT=8000
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --build)   BUILD_ONLY=1 ;;
+    --port)    PREFERRED_PORT="${2:?--port needs a number}"; shift ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)         die "unknown option: $1 (try --help)" ;;
+  esac
+  shift
+done
+
+printf '\n  %sThe Cutting Room%s · documentation\n' "$_B" "$_R"
+
+[ -f "$CFG" ] || die "no mkdocs config at ${CFG#"$ROOT"/}"
+
+step "Checking prerequisites"
+require uv "mkdocs is installed in ReelScraper's dev dependency group" "https://docs.astral.sh/uv/"
+check_python
+
+step "Preparing the docs toolchain"
+say "syncing ReelScraper's dev group (mkdocs + mkdocs-material)…"
+( cd "$ROOT/ReelScraper" && uv sync --group dev --quiet >/dev/null 2>&1 ) \
+  || die "could not install the docs toolchain — try: cd ReelScraper && uv sync --group dev"
+ok "mkdocs ready"
+
+step "Building"
+if ( cd "$ROOT" && uv run --project ReelScraper mkdocs build -f "$CFG" --quiet 2>&1 ); then
+  ok "built into documentation/site"
+else
+  die "mkdocs build failed — run it directly to see why:
+    uv run --project ReelScraper mkdocs build -f documentation/mkdocs.yml"
+fi
+
+if [ "$BUILD_ONLY" -eq 1 ]; then
+  printf '\n'
+  say "The hub serves this at /documentation once it is restarted."
+  printf '\n'; exit 0
+fi
+
+PORT="$(free_port "$PREFERRED_PORT")"
+[ "$PORT" = "$PREFERRED_PORT" ] || warn "port $PREFERRED_PORT is busy — using $PORT"
+URL="http://127.0.0.1:$PORT"
+
+step "Serving"
+say "live reload is on — edits under documentation/docs/ rebuild automatically"
+printf '\n  %sdocs%s  %s\n' "$_D" "$_R" "$URL"
+printf '  %sstop%s  Ctrl+C\n\n' "$_D" "$_R"
+( sleep 2; open_browser "$URL" ) &
+
+# Foreground on purpose: this one is a watch server, so Ctrl+C should stop it.
+exec uv run --project ReelScraper mkdocs serve -f "$CFG" -a "127.0.0.1:$PORT"

@@ -1,0 +1,77 @@
+name: Health
+
+# The full gate: `./health` runs all four Python suites, the Dashboard's
+# typecheck/lint/unit-tests/production build, the docs build, and the repository invariants,
+# then exits non-zero if anything failed.
+#
+# It runs on BOTH pull_request (so nothing broken can be merged) and push to main (so a
+# merge race or a direct push is still caught). ci-python.yml and ci-dashboard.yml stay as
+# fast, path-filtered feedback; this job is the one that should be a required status check.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: health-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: ./health (full pipeline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Keep the live smoke tests skipped; this job never reaches the network.
+      RUN_LIVE_SMOKE: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@caf0cab7a618c569241d31dcd442f54681755d39 # v3
+        with:
+          enable-cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: Dashboard/.nvmrc
+          cache: npm
+          cache-dependency-path: Dashboard/package-lock.json
+
+      # Without ffmpeg, ./health records it as a SKIP and ~13 SimilarContent stitch tests
+      # quietly do not run — a green result that covered less than it appears to.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -version | head -1
+
+      # ./health SKIPS the entire Dashboard block when node_modules is absent, so a missing
+      # install would turn into a green-but-empty run rather than a failure. Install first.
+      - name: Install Dashboard dependencies
+        working-directory: Dashboard
+        run: npm ci
+
+      - name: Sync Python dependencies
+        run: |
+          for c in ReelScraper AnalysisEngine AutoSearch SimilarContent; do
+            echo "::group::uv sync $c"
+            (cd "$c" && uv sync)
+            echo "::endgroup::"
+          done
+
+      # No --quick (that skips builds and docs) and no --live (that boots the hub and hits
+      # the network). ./health already exits non-zero on any failure.
+      - name: Run ./health
+        run: ./health

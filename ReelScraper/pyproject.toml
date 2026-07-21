@@ -1,0 +1,29 @@
+[project]
+name = "the-cutting-room"
+version = "1.0.0"
+description = "Local short-form virality analysis pipeline — scrape, score, remember, serve. Backend agent + API hub + CLI."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = ["openpyxl>=3.1", "fastapi>=0.115", "uvicorn[standard]>=0.30"]
+
+[project.scripts]
+pipeline = "cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["cli", "download_media"]
+packages = ["core", "api"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.7.7",
+    "pytest>=8.0",
+    "httpx>=0.27",
+]

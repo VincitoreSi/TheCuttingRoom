@@ -1,0 +1,14 @@
+dist
+node_modules
+
+# Generated backend contract snapshot — not frontend source, not this pass's concern.
+.openapi.json
+# Root HTML shell — out of scope for this src/ hygiene pass.
+index.html
+
+# The hand-rolled CSS intentionally packs short rules onto one line (see
+# styles/components.css header comment) as a deliberate, consistent style —
+# Prettier's CSS printer would explode every rule onto its own line and
+# rewrite the whole design-token stylesheet. Formatting stays scoped to
+# TS/TSX; the CSS keeps its existing hand-tuned formatting untouched.
+src/styles/*.css

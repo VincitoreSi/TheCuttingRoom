@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+#
+# ./health — run everything that can tell you this repo is sound.
+#
+#   ./health              prerequisites, all test suites, typecheck, lint, builds, docs, invariants
+#   ./health --quick      unit tests only (fast — skips builds, docs and the live smoke)
+#   ./health --live       also boot the hub and exercise the real HTTP surface
+#   ./health --fix        run the formatters that have a --write mode, then re-check
+#
+# Exits non-zero if anything fails, so it works as a pre-commit or CI gate.
+#
+# It is deliberately more than a test runner: several things that have actually broken here
+# were invisible to unit tests — a gitignore rule silently swallowing the demo dataset, a
+# generated reel landing in the scraped-corpus namespace, a credential file reappearing. Those
+# are checked as invariants at the end.
+set -uo pipefail          # NOT -e: a failing check must be recorded, not abort the run
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common.sh
+. "$ROOT/scripts/_common.sh"
+
+QUICK=0; LIVE=0; FIX=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --quick)   QUICK=1 ;;
+    --live)    LIVE=1 ;;
+    --fix)     FIX=1 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)         die "unknown option: $1 (try --help)" ;;
+  esac
+  shift
+done
+
+PASS=0; FAIL=0; SKIP=0
+FAILED_NAMES=()
+declare -a ROWS
+
+# record <name> <status> <detail>
+record() {
+  local name="$1" status="$2" detail="${3:-}"
+  case "$status" in
+    pass) PASS=$((PASS+1)); printf '    %s✓%s %-34s %s\n' "$_G" "$_R" "$name" "$detail" ;;
+    fail) FAIL=$((FAIL+1)); FAILED_NAMES+=("$name")
+          printf '    %s✗%s %-34s %s\n' "$_E" "$_R" "$name" "$detail" ;;
+    skip) SKIP=$((SKIP+1)); printf '    %s-%s %-34s %s\n' "$_D" "$_R" "$name" "$detail" ;;
+  esac
+  ROWS+=("$status|$name|$detail")
+}
+
+# run <name> <dir> <command...> — run it, capture output, record pass/fail
+LOG_DIR="$(mktemp -d)"
+trap 'rm -rf "$LOG_DIR"' EXIT
+run() {
+  local name="$1" dir="$2"; shift 2
+  local log="$LOG_DIR/$(echo "$name" | tr -c '[:alnum:]' '_').log"
+  if ( cd "$dir" && "$@" ) >"$log" 2>&1; then
+    record "$name" pass "$(tail -1 "$log" | cut -c1-46)"
+  else
+    record "$name" fail "see below"
+    printf '%s' "$name" >> "$LOG_DIR/.failed"
+    echo >> "$LOG_DIR/.failed"
+  fi
+}
+
+printf '\n  %sThe Cutting Room%s · health check%s\n' "$_B" "$_R" \
+  "$([ "$QUICK" -eq 1 ] && echo ' (quick)')"
+
+# ---------------------------------------------------------------- 1. prerequisites
+step "Prerequisites"
+for b in uv python3 curl git; do
+  if have "$b"; then record "$b" pass "$($b --version 2>&1 | head -1 | cut -c1-30)"
+  else record "$b" fail "REQUIRED — not on PATH"; fi
+done
+if have node; then
+  maj="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  [ "$maj" -ge 20 ] && record node pass "$(node -v)" || record node fail "need >= 20, have $(node -v)"
+else record node fail "REQUIRED for the Dashboard"; fi
+have npm && record npm pass "$(npm -v)" || record npm fail "REQUIRED"
+# ffmpeg is optional until you render — say so rather than failing the run
+if have ffmpeg && have ffprobe; then record ffmpeg pass "$(ffmpeg -version 2>/dev/null | head -1 | cut -c1-30)"
+else record ffmpeg skip "absent — rendering and ~13 stitch tests will skip"; fi
+
+# ---------------------------------------------------------------- 2. python suites
+step "Python test suites"
+for p in ReelScraper AnalysisEngine AutoSearch SimilarContent; do
+  if [ -d "$ROOT/$p/tests" ]; then
+    run "$p tests" "$ROOT/$p" uv run pytest tests/ -q -p no:warnings
+  else
+    record "$p tests" skip "no tests/ directory"
+  fi
+done
+
+# ---------------------------------------------------------------- 3. dashboard
+step "Dashboard"
+if [ ! -d "$ROOT/Dashboard/node_modules" ]; then
+  record "Dashboard deps" skip "node_modules missing — run ./init first"
+else
+  [ "$FIX" -eq 1 ] && ( cd "$ROOT/Dashboard" && npx prettier --write "src/**/*.{ts,tsx,css}" >/dev/null 2>&1 )
+  run "typecheck (tsc)"  "$ROOT/Dashboard" npx tsc --noEmit
+  run "unit tests (vitest)" "$ROOT/Dashboard" npx vitest run
+  run "lint (eslint)"    "$ROOT/Dashboard" npm run lint
+  if [ "$QUICK" -eq 0 ]; then
+    run "production build" "$ROOT/Dashboard" npm run build
+  else
+    record "production build" skip "--quick"
+  fi
+fi
+
+# ---------------------------------------------------------------- 4. docs
+step "Documentation"
+if [ "$QUICK" -eq 1 ]; then
+  record "mkdocs build" skip "--quick"
+else
+  run "mkdocs build" "$ROOT" uv run --project ReelScraper mkdocs build -f documentation/mkdocs.yml
+fi
+
+# ---------------------------------------------------------------- 5. invariants
+# Things unit tests cannot see, each of which has genuinely broken here at least once.
+step "Repository invariants"
+
+# Several of these read git. A copy of the tree without a .git directory (a downloaded
+# archive, a tarball, this script's own clean-room tests) is a legitimate way to run the
+# project, so those checks SKIP rather than reporting a false failure.
+IS_GIT=0
+( cd "$ROOT" && git rev-parse --is-inside-work-tree >/dev/null 2>&1 ) && IS_GIT=1
+[ "$IS_GIT" -eq 1 ] || say "${_D}(not a git work tree — git-based invariants will skip)${_R}"
+
+# (a) no credentials on disk or in history
+envs="$(find "$ROOT" -name '.env' -not -path '*/node_modules/*' -not -path '*/.venv/*' 2>/dev/null | wc -l | tr -d ' ')"
+[ "$envs" -eq 0 ] && record "no .env on disk" pass "only .env.example templates" \
+                  || record "no .env on disk" skip "$envs present (fine locally, never commit)"
+if [ "$IS_GIT" -eq 1 ]; then
+  tracked_env="$(cd "$ROOT" && git ls-files | grep -cE '(^|/)\.env$' || true)"
+  [ "${tracked_env:-0}" -eq 0 ] && record "no .env tracked" pass "" \
+                               || record "no .env tracked" fail "$tracked_env tracked!"
+  # Match realistic key SHAPES (a prefix followed by a long random body), not bare
+  # prefixes. Bare 'sk-ant-'/'nvapi-'/'ghp_'/'AKIA' appear legitimately in this very
+  # script's pattern list, in docs describing key formats, and in lockfile package names
+  # (ghp_import, a mkdocs dependency) — scanning for them alone reported every one of those
+  # as a leak. AIza… is included because GEMINI_API_KEY is this project's primary
+  # credential; the one public YouTube InnerTube key hardcoded in youtube/scrape.py (baked
+  # into youtube.com, not a user secret) is allowlisted. ':!health' excludes this scanner,
+  # which necessarily contains the shapes. -p over --all scans added lines across history.
+  secret_re='(sk-ant-[A-Za-z0-9_-]{24,}|nvapi-[A-Za-z0-9_-]{40,}|ghp_[A-Za-z0-9]{36}|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35})'
+  secret_allow='AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8'
+  hist="$(cd "$ROOT" && git log --all -p -- ':!health' 2>/dev/null \
+          | grep -E '^\+' | grep -oE "$secret_re" | grep -vFx "$secret_allow" \
+          | sort -u | wc -l | tr -d ' ')"
+  [ "${hist:-0}" -eq 0 ] && record "no secrets in git history" pass "scanned all refs" \
+                        || record "no secrets in git history" fail "$hist real key shape(s) in history"
+else
+  record "no .env tracked" skip "no git"
+  record "no secrets in git history" skip "no git"
+fi
+
+# (b) the corpus and generated-render namespaces must never mix
+leak="$(find "$ROOT/ReelScraper/media" -name 'reel.mp4' -o -name 'poster.jpg' 2>/dev/null | wc -l | tr -d ' ')"
+[ "$leak" -eq 0 ] && record "renders not in corpus media" pass "media/ holds scraped media only" \
+                 || record "renders not in corpus media" fail "$leak generated file(s) in media/"
+
+# (c) the demo dataset must be fully committable — unanchored ignore rules have eaten it before
+if [ ! -d "$ROOT/demo-data" ]; then
+  record "demo dataset committable" skip "no demo-data/"
+elif [ "$IS_GIT" -eq 0 ]; then
+  record "demo dataset committable" skip "no git"
+else
+  ign="$(cd "$ROOT" && find demo-data -type f | git check-ignore --stdin 2>/dev/null | wc -l | tr -d ' ')"
+  tot="$(find "$ROOT/demo-data" -type f | wc -l | tr -d ' ')"
+  [ "$ign" -eq 0 ] && record "demo dataset committable" pass "$tot files, none ignored" \
+                  || record "demo dataset committable" fail "$ign of $tot files are gitignored"
+fi
+
+# (d) live working data must STILL be ignored
+# Checked against PATHS, not against what happens to exist: a rule that only covers files
+# already on disk is no rule at all. `./demo` writes the private dataset into content.json,
+# the exports and renders/ — all of which lived outside the ignore rules until they were
+# added, so a single ./demo followed by `git add -A` would have published it. git
+# check-ignore does not require the path to exist, so every one of these is checked always.
+if [ "$IS_GIT" -eq 1 ]; then
+  # Every entry names a FILE, never a bare directory. A directory-only rule (`logs/`) cannot
+  # match a path that does not exist on disk, because git has no way to know the path was
+  # meant to be a directory — `ReelScraper/logs` reports committable while
+  # `ReelScraper/logs/agents.jsonl` correctly reports ignored.
+  bad=0; checked=0; missed=""
+  for p in "ReelScraper/media/instagram/1.jpg" "ReelScraper/logs/agents.jsonl" "links.txt" \
+           "ReelScraper/platforms/instagram/pages.txt" \
+           "ReelScraper/platforms/instagram/content.json" \
+           "ReelScraper/platforms/instagram/virality_reels.csv" \
+           "ReelScraper/platforms/instagram/reels_raw.json" \
+           "ReelScraper/platforms/instagram/Virality_Analysis.xlsx" \
+           "ReelScraper/memory/shared/insights.jsonl" \
+           "ReelScraper/renders/instagram/abc123/reel.mp4" \
+           "ReelScraper/renders/index.json" \
+           "ReelScraper/studio/instagram/x.md" \
+           "demodataset.zip"; do
+    checked=$((checked+1))
+    ( cd "$ROOT" && git check-ignore -q "$p" ) || { bad=$((bad+1)); missed="$missed $p"; }
+  done
+  [ "$bad" -eq 0 ] && record "working data ignored" pass "$checked path(s) checked" \
+                 || record "working data ignored" fail "committable:$missed"
+else
+  record "working data ignored" skip "no git"
+fi
+
+# (e) the hub must not have grown a non-loopback bind
+# grep, not git grep, so this holds outside a work tree too.
+if grep -rqn '0\.0\.0\.0' "$ROOT/ReelScraper/cli.py" "$ROOT/ReelScraper/api" 2>/dev/null; then
+  record "hub binds loopback only" fail "found a 0.0.0.0 bind"
+else
+  record "hub binds loopback only" pass "127.0.0.1"
+fi
+
+# (f) credentials that exist must actually work
+# Network-dependent, so it runs only under --live alongside the other online checks. A key
+# is verified against its provider, never merely checked for presence — the two look
+# identical right up until an agent fails partway through a paid run.
+if [ "$LIVE" -eq 1 ]; then
+  if python3 "$ROOT/scripts/check-keys.py" --quiet 2>/dev/null; then
+    record "api keys usable" pass "verified against providers (or none set)"
+  else
+    record "api keys usable" fail "run: python3 scripts/check-keys.py"
+  fi
+fi
+
+# ---------------------------------------------------------------- 6. live smoke
+if [ "$LIVE" -eq 1 ]; then
+  step "Live smoke test"
+  URL="http://127.0.0.1:8787"
+  STARTED=0
+  if hub_responding "$URL"; then
+    record "hub reachable" pass "reusing the one already running"
+  else
+    PORT="$(free_port 8787)"
+    if start_hub "$PORT" 2>/dev/null; then
+      URL="$HUB_URL"; STARTED=1
+      record "hub reachable" pass "started on $URL"
+    else
+      record "hub reachable" fail "could not start"
+    fi
+  fi
+  if hub_responding "$URL"; then
+    for ep in "api/platforms" "api/content/instagram" "api/studio/instagram" \
+              "api/renders/instagram" "api/producers" "favicon.ico" "/"; do
+      code="$(curl -s -o /dev/null -w '%{http_code}' "$URL/${ep#/}")"
+      [ "$code" = "200" ] && record "GET /${ep#/}" pass "200" \
+                          || record "GET /${ep#/}" fail "HTTP $code"
+    done
+    # a render must actually stream, with range support, or inline playback breaks
+    rid="$(curl -s "$URL/api/renders/instagram" \
+      | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d[0]["render_id"] if d else "")' 2>/dev/null)"
+    if [ -n "$rid" ]; then
+      hdr="$(curl -sI -H 'Range: bytes=0-99' "$URL/renders/instagram/$rid/reel.mp4" | head -1)"
+      echo "$hdr" | grep -q 206 && record "render streams (range)" pass "206 Partial Content" \
+                                || record "render streams (range)" fail "$hdr"
+    else
+      record "render streams (range)" skip "no renders present"
+    fi
+    # CORS must not have regressed to a wildcard
+    acao="$(curl -s -D- -o /dev/null -H 'Origin: https://evil.example' "$URL/api/platforms" \
+            | grep -ci 'access-control-allow-origin' || true)"
+    [ "${acao:-0}" -eq 0 ] && record "CORS rejects foreign origin" pass "no ACAO header" \
+                          || record "CORS rejects foreign origin" fail "wildcard CORS is back"
+  fi
+  [ "$STARTED" -eq 1 ] && [ -f "$ROOT/.hub.pid" ] && kill "$(cat "$ROOT/.hub.pid")" 2>/dev/null && \
+    say "${_D}(stopped the hub this run started)${_R}"
+else
+  step "Live smoke test"
+  record "live HTTP surface" skip "pass --live to boot the hub and exercise it"
+fi
+
+# ---------------------------------------------------------------- summary
+printf '\n  %s%s%s\n' "$_B" "────────────────────────────────────────────────" "$_R"
+if [ "$FAIL" -eq 0 ]; then
+  printf '  %sHEALTHY%s — %d passed, %d skipped\n\n' "$_G" "$_R" "$PASS" "$SKIP"
+  exit 0
+fi
+
+printf '  %s%d FAILED%s — %d passed, %d skipped\n\n' "$_E" "$FAIL" "$_R" "$PASS" "$SKIP"
+for n in "${FAILED_NAMES[@]}"; do
+  log="$LOG_DIR/$(echo "$n" | tr -c '[:alnum:]' '_').log"
+  printf '  %s%s%s\n' "$_E" "$n" "$_R"
+  [ -f "$log" ] && tail -14 "$log" | sed 's/^/      /'
+  printf '\n'
+done
+exit 1

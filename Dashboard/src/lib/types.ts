@@ -1,0 +1,521 @@
+// Types mirror the live hub contract (api/app.py). Verified against real
+// responses, not just the OpenAPI schema (which is free-form for writes).
+
+// "analysis-engine" is the AnalysisEngine blueprint stage (the 6th board node);
+// the hub exposes it on /api/pipeline/{p}/analysis-engine and streams it in JOBS.
+// "auto-search" (manual pass) / "auto-search-beat" (heartbeat tick) are the new
+// Discover stage (§11) — the 7th board node, sitting FIRST in the pipeline.
+// "render" is the per-item render trigger (POST /api/studio/{p}/{file}/render).
+// Its job key is `${platform}:render:${file}` — one job per studio item, so the
+// Renders tab can look a card's live status up with a single map read.
+export type Stage =
+  | "scrape"
+  | "analyze"
+  | "media"
+  | "analysis-engine"
+  | "auto-search"
+  | "auto-search-beat"
+  | "render";
+export type JobStatus = "queued" | "running" | "done" | "error";
+
+export interface PlatformSummary {
+  platform: string;
+  has_data: boolean;
+  items: number;
+  creators: number;
+  viral: number;
+  media_ready: number;
+}
+
+export interface Reel {
+  platform: string;
+  creator: string;
+  creator_followers: number | null;
+  content_id: string;
+  url: string;
+  plays: number | null;
+  virality_score: number | null;
+  tier: string | null;
+  reach_multiplier: number | null;
+  outlier_score: number | null;
+  engagement_rate: number | null;
+  velocity: number | null;
+  duration_s: number | null;
+  caption: string | null;
+  posted: string | null;
+  video_url: string | null;
+  thumb_url: string | null;
+  video_local: boolean;
+
+  // audio intelligence (D3) — the sound attached to this reel
+  analyzed?: boolean;
+  audio_id?: string | null;
+  audio_title?: string | null;
+  audio_artist?: string | null;
+  audio_is_original?: boolean | null;
+  audio_is_reusable?: boolean | null;
+  sound_page_url?: string | null;
+  audio_uses_count?: number | null;
+
+  // client-only: the AnalysisEngine self-eval score, joined from /api/evals so
+  // the Corpus grid can sort/filter by blueprint quality (§9.2 QC facet).
+  eval_score?: number | null;
+}
+
+export interface Tier {
+  label: string;
+  min_score: number;
+}
+
+export interface ViralityConfig {
+  weights: Record<string, number>;
+  tiers: Tier[];
+  top_n: number;
+}
+
+export interface Discovery {
+  enabled: boolean;
+  keywords: string[];
+  seeds: string[];
+  search_terms: number;
+  per_query: number;
+  max_candidates: number;
+  min_followers: number;
+  expand_related: boolean;
+}
+
+export interface NicheConfig {
+  niche?: string;
+  reels_per_creator?: number;
+  discovery?: Discovery;
+  virality?: ViralityConfig;
+  [k: string]: unknown;
+}
+
+export interface ConfigResponse {
+  config: NicheConfig;
+  pages: string[];
+}
+
+export interface Factor {
+  feature: string;
+  bucket: string;
+  n: number;
+  mean_score: number;
+  lift: number;
+}
+
+export interface FactorsResponse {
+  // null on an empty corpus — corpus.py returns None when there is nothing to average.
+  // Declaring it `number` was a type lie that white-screened the Board on a fresh install.
+  baseline: number | null;
+  all: Factor[];
+  winners: Factor[];
+  losers: Factor[];
+}
+
+export interface Proposal {
+  file: string;
+  text: string;
+  // human-gate fields (§2). Legacy items with no metadata default to "draft".
+  status?: string;
+  agent?: string | null;
+  kind?: string | null;
+  created_at?: number;
+  updated_at?: number;
+  note?: string | null;
+}
+
+/* ---------------- renders (producer-generated media) ----------------
+   Generated reels live in `renders/<platform>/<render_id>/`, served at
+   /renders — never in /media, which holds the scraped corpus. One studio item
+   maps to exactly one render dir, so `render.file` joins to `Proposal.file`. */
+
+export interface RenderFrame {
+  frame: string;
+  kb?: number;
+  provider?: string | null;
+  on_screen_text?: string | null;
+  /** Seconds this frame holds on screen; only the newest records carry it. */
+  duration_s?: number | null;
+}
+
+export interface RenderAsset {
+  name: string;
+  bytes: number;
+}
+
+export interface RenderRecord {
+  render_id: string;
+  platform: string;
+  file: string; // joins to Proposal.file exactly
+  agent?: string | null;
+  kind?: string | null;
+  content_id?: string | null;
+  slug?: string | null;
+
+  // the caption generator ships later — null on every record today
+  caption?: string | null;
+  caption_model?: string | null;
+  /** Ready-to-paste caption alternates, when the generator wrote any. */
+  alt_captions?: string[];
+  hashtags?: string[];
+
+  duration_s?: number | null;
+  width?: number | null;
+  height?: number | null;
+  /** Producer-declared frame shape, e.g. "9:16". Preferred over width/height
+      when present; not every record carries it yet. */
+  aspect_ratio?: string | null;
+  /** How the producer fitted source frames into the output box ("cover"). */
+  video_fit?: string | null;
+  fps?: number | null;
+  has_audio?: boolean | null;
+
+  provider?: string | null;
+  seed?: number | null;
+  frames?: RenderFrame[];
+
+  run_id?: string | null;
+  evaluation?: Record<string, unknown> | null;
+  /** Shots the producer skipped, when it reported any. */
+  dropped_shots?: unknown[];
+  note?: string | null;
+
+  assets?: RenderAsset[];
+  created_at?: number;
+  updated_at?: number;
+
+  // cache-busted by the hub (`?v=<updated_at ms>`) so a re-render repaints
+  video_url?: string | null;
+  poster_url?: string | null;
+  local_path?: string | null;
+  bytes?: number | null;
+}
+
+/* ---------------- producer registry (§3, §5) ---------------- */
+
+export interface SecretStatus {
+  name: string;
+  env_var: string;
+  required: boolean;
+  present?: boolean | null; // resolvability, self-reported — never the value (§10.4)
+}
+
+export interface JSONSchemaProp {
+  type?: string;
+  default?: unknown;
+  enum?: unknown[];
+  description?: string;
+  title?: string;
+  minimum?: number;
+  maximum?: number;
+}
+
+export interface JSONSchema {
+  type?: string;
+  properties?: Record<string, JSONSchemaProp>;
+  required?: string[];
+}
+
+export interface Producer {
+  name: string;
+  kind: string | null;
+  consumes: string[];
+  human_gate: boolean;
+  needs_reference: boolean;
+  produces: string | null;
+  output_status: string | null;
+  config_schema?: JSONSchema | null;
+  secrets?: SecretStatus[];
+  registered_at?: number;
+  updated_at?: number;
+  workflow_stages?: string[];
+}
+
+export interface AgentBoardItem {
+  content_id: string;
+  stage: string;
+  score?: number | null;
+  file?: string | null;
+  updated?: number | null;
+}
+export interface AgentRun {
+  run_id: string;
+  platform?: string | null;
+  started?: number | null;
+  ended?: number | null;
+  counts: { total: number; done: number; failed: number };
+  items: AgentBoardItem[];
+}
+export interface AgentBoard {
+  agent: string;
+  kind?: string | null;
+  workflow_stages: string[];
+  runs: AgentRun[];
+}
+
+export interface AgentConfigResponse {
+  agent: string;
+  config: Record<string, unknown>;
+  defaults: Record<string, unknown>;
+  config_schema: JSONSchema;
+}
+
+/* ---------------- audio intelligence (§2, D3) ---------------- */
+
+export interface TrendingSound {
+  audio_id: string;
+  title: string;
+  artist: string;
+  is_original: boolean;
+  is_reusable: boolean;
+  sound_page_url: string;
+  uses_in_corpus: number;
+  uses_count_meta?: number | null;
+  recent_uses?: number;
+  trend_score: number;
+  bucket: string; // Rising | Hot | Steady | Saturated | …
+  example?: { content_id: string; url: string; virality_score: number } | null;
+}
+
+/* ---------------- analysis blueprint v2 (§2, §4, D1) ---------------- */
+
+export interface BlueprintVideoMeta {
+  estimated_duration_seconds?: number;
+  aspect_ratio?: string;
+  resolution?: string;
+  fps?: number;
+  content_type?: string;
+  one_line_summary?: string;
+  detailed_summary?: string;
+  target_platform?: string;
+  likely_ai_generated?: boolean;
+  ai_generation_signals?: string[];
+  total_shots?: number;
+}
+
+export interface BlueprintGlobalStyle {
+  overall_mood?: string;
+  genre?: string;
+  visual_style?: string;
+  color_grading?: string;
+  dominant_color_palette_hex?: string[];
+  lighting_style?: string;
+  pacing?: string;
+  editing_style?: string;
+  recurring_visual_motifs?: string[];
+  film_look_reference?: string;
+}
+
+export interface BlueprintAudio {
+  music_description?: string;
+  music_genre?: string;
+  tempo_bpm_estimate?: number;
+  music_mood?: string;
+  has_voiceover?: boolean;
+  voiceover_transcript?: string;
+  has_lyrics?: boolean;
+  lyrics_transcript?: string;
+  sound_effects?: string[];
+  audio_sync_notes?: string;
+  audio_id?: string;
+  audio_title?: string;
+  audio_artist?: string;
+  audio_is_original?: boolean;
+  audio_is_reusable?: boolean;
+  sound_page_url?: string;
+}
+
+export interface BlueprintAudioStrategy {
+  audio_type?: string;
+  voiceover_role?: string;
+  music_role?: string;
+  beat_markers_s?: number[];
+  reuse_recommendation?: string;
+  substitute_brief?: string;
+  sync_notes?: string;
+}
+
+export interface BlueprintCharacter {
+  id: string;
+  role: string;
+  detailed_appearance: string;
+  appears_in_shots?: number[];
+}
+
+export interface BlueprintTextOverlay {
+  start_time: number;
+  end_time: number;
+  text: string;
+  font_style?: string;
+  color?: string;
+  position?: string;
+  animation?: string;
+}
+
+export interface BlueprintShot {
+  shot_index: number;
+  start_time: number;
+  end_time: number;
+  duration: number;
+  description?: string;
+  generation_prompt: string;
+  negative_prompt?: string;
+  subjects_present?: string[];
+  setting_location?: string;
+  action_motion?: string;
+  camera_shot_size?: string;
+  camera_angle?: string;
+  camera_movement?: string;
+  lens_feel?: string;
+  lighting?: string;
+  color_palette_hex?: string[];
+  mood?: string;
+  on_screen_text?: string;
+  transition_in?: string;
+  transition_out?: string;
+}
+
+export interface BlueprintRegenGuide {
+  recommended_models?: string[];
+  master_style_prompt?: string;
+  global_negative_prompt?: string;
+  consistency_notes?: string;
+  assembly_instructions?: string;
+  shot_prompt_sequence?: unknown[];
+}
+
+export interface BlueprintViralityFormula {
+  hook?: { type?: string; first_seconds?: string; on_screen_text?: string };
+  retention_devices?: unknown[];
+  pacing?: { cuts?: number; avg_shot_len_s?: number };
+  cta?: { present?: boolean; text?: string };
+  replicable_formula?: string;
+  tags?: string[];
+}
+
+export interface BlueprintEvaluation {
+  score_0_100?: number;
+  per_criterion?: Record<string, number>;
+  passes?: number;
+  gaps_remaining?: string[];
+  accepted?: boolean;
+  judge_model?: string;
+  verdict?: string;
+}
+
+export interface Blueprint {
+  content_id: string;
+  schema_version: number;
+  url?: string | null;
+  model?: string;
+  analyzed_by?: string;
+  duration_s?: number | null;
+  is_reference?: boolean;
+  platform?: string;
+  analyzed_at?: number;
+
+  video_metadata?: BlueprintVideoMeta;
+  global_style?: BlueprintGlobalStyle;
+  audio?: BlueprintAudio;
+  audio_strategy?: BlueprintAudioStrategy;
+  characters_and_subjects?: BlueprintCharacter[];
+  text_overlays?: BlueprintTextOverlay[];
+  shots?: BlueprintShot[];
+  regeneration_guide?: BlueprintRegenGuide;
+  virality_formula?: BlueprintViralityFormula;
+  evaluation?: BlueprintEvaluation;
+}
+
+/* ---------------- reference intake (§2, §8) ---------------- */
+
+export interface ReferenceItem {
+  content_id?: string;
+  ref_id?: string;
+  id?: string;
+  url?: string;
+  status?: string;
+  analyzed?: boolean;
+  is_reference?: boolean;
+  created_at?: number;
+  note?: string | null;
+  [k: string]: unknown;
+}
+
+/* ---------------- discovery / AutoSearch candidates (§11.2, §11.4) --------
+   Mirrors discovery/{platform}/candidates.json rows exactly (verified against
+   the live GET /api/discovery/instagram/pending response — `handle` is the
+   full profile URL the agent hydrated, not a bare @handle). */
+
+export interface CandidateRelevance {
+  score: number; // 0..1, Claude relevance judgment
+  reasons: string[];
+}
+
+export const CANDIDATE_STATUSES = ["pending", "approved", "rejected"] as const;
+export type CandidateStatus = (typeof CANDIDATE_STATUSES)[number];
+
+export interface Candidate {
+  candidate_id: string;
+  handle: string;
+  platform: string;
+  source_term?: string | null;
+  discovered_via: string;
+  followers?: number | null;
+  median_plays?: number | null;
+  sample_reels: string[];
+  relevance: CandidateRelevance;
+  status: string; // CandidateStatus, kept loose to tolerate future values
+  in_pages: boolean; // derived: handle already a non-comment line in pages.txt
+  added_at: number;
+  updated_at: number;
+  ts?: number;
+}
+
+/* ---------------- platform-wide concerns (§10) ---------------- */
+
+export interface LogEvent {
+  agent: string;
+  level: string; // info | warn | error | …
+  event: string;
+  msg?: string | null;
+  run_id?: string | null;
+  platform?: string | null;
+  content_id?: string | null;
+  ts: number;
+  data?: Record<string, unknown> | null;
+}
+
+export interface EvalRecord {
+  agent: string;
+  target_type: string; // blueprint | clone | proposal | …
+  target_id: string;
+  scores?: Record<string, number> | null;
+  verdict?: string | null;
+  judge?: string | null;
+  notes?: string | null;
+  platform?: string | null;
+  ts: number;
+}
+
+export interface Insight {
+  ts: number;
+  platform: string;
+  kind: string; // method | negative | finding | ...
+  text: string;
+  tags: string[];
+}
+
+export interface Job {
+  platform: string;
+  stage: Stage;
+  status: JobStatus;
+  started: number;
+  ended: number | null;
+  rc: number | null;
+  tail: string;
+}
+
+// SSE /api/events streams the whole JOBS dict, keyed "platform:stage:seq".
+export type Jobs = Record<string, Job>;

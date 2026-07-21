@@ -1,0 +1,81 @@
+# niches/football.yaml — example niche: Football (soccer).
+# Sports clips are VELOCITY-driven: a goal or skill clip spikes hard within hours and
+# rides reposts, so velocity + reach are up-weighted vs the reach-led Fashion default.
+# See niches/fashion.yaml for the fully-commented canonical schema.
+
+niche: Football
+
+platforms:
+
+  instagram:
+    reels_per_creator: 250
+    discovery:
+      keywords:
+        - football
+        - soccer
+        - goal
+        - matchday
+        - football skills
+        - freestyle football
+        - football edits
+        - futbol
+        - premier league
+        - football tactics
+        - striker
+        - football highlights
+        - matchday vlog
+        - football fan
+        - boot review
+      seeds: []
+    weights:
+      reach_multiplier: 0.30
+      outlier_score: 0.25
+      engagement_rate: 0.20
+      velocity: 0.25
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@example.football.edits"
+      - "@example.soccer.skills"
+      - "@example.matchday.clips"
+      - "@example.freestyle.fc"
+
+  x:
+    posts_per_creator: 200
+    # X is the live-reaction feed for football — reposts explode fastest here, so velocity
+    # is the single heaviest signal.
+    weights:
+      reach_multiplier: 0.25
+      outlier_score: 0.20
+      engagement_rate: 0.20
+      velocity: 0.35
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@ex_football_1"
+      - "@ex_soccer_daily"
+      - "@ex_footy_clips"
+
+  youtube:
+    shorts_per_creator: 200
+    # Shorts still slow-burn, but match clips spike, so velocity is lifted above Fashion.
+    weights:
+      reach_multiplier: 0.35
+      outlier_score: 0.30
+      engagement_rate: 0.15
+      velocity: 0.20
+    tiers:
+      - { label: Viral,         min_score: 85 }
+      - { label: High,          min_score: 70 }
+      - { label: Above Average, min_score: 50 }
+      - { label: Normal,        min_score: 0 }
+    seed_pages:
+      - "@example.football.shorts"
+      - "@example.soccer.skills"
+      - "@example.goals.tv"

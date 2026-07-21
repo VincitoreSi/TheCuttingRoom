@@ -1,0 +1,52 @@
+{
+  "name": "<AGENT_NAME>",
+  "kind": "<clone|proposal|idea|template>",
+  "consumes": ["corpus", "analysis", "audio", "insights"],
+  "human_gate": false,
+  "needs_reference": false,
+  "produces": "studio_markdown",
+  "output_status": "proposed",
+  "workflow_stages": ["Queued", "Generating", "Self-eval", "Proposed", "Approved", "Rejected"],
+  "config_schema": {
+    "type": "object",
+    "title": "<AGENT_NAME> config",
+    "description": "Tunable knobs for this producer (the hub contract §10.3). The hub stores the live values at config/agents/<AGENT_NAME>.json and the Dashboard renders a form from this schema. Fill in / edit per agent.",
+    "properties": {
+      "platform": {
+        "type": "string",
+        "enum": ["instagram", "x", "youtube"],
+        "default": "instagram",
+        "description": "Which platform corpus/analysis to produce against."
+      },
+      "variants_per_run": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10,
+        "default": 3,
+        "description": "How many distinct outputs to generate per run."
+      },
+      "min_score": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100,
+        "default": 70,
+        "description": "Only build from exemplars/blueprints at or above this virality score."
+      },
+      "eval_threshold": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 100,
+        "default": 85,
+        "description": "Self-eval score an output must reach before it is published (§10.2)."
+      }
+    },
+    "additionalProperties": false
+  },
+  "secrets": [
+    {
+      "name": "<secret label, e.g. image_provider_api_key>",
+      "env_var": "<ENV_VAR_NAME, e.g. GEMINI_API_KEY>",
+      "required": true
+    }
+  ]
+}
