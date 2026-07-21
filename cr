@@ -459,31 +459,31 @@ SimilarContent/engine/hub.py:104,129 + cli.py:107 passes untouched."
     # not exist (demo:25-34 accepts only --keep/--port/-h and dies on anything else); and if
     # it had got past those it would have started a SECOND hub inside the container.
     #
-    # PRECONDITION, NOT YET MET: `demo` needs a real --no-launch flag that stops after loading
-    # the dataset. VERIFIED ABSENT in the current tree. Until it lands this verb cannot work,
-    # because the "load data, do not start a hub" mode does not exist in the script. It is
-    # owned by whoever owns the six entry points.
+    # --no-launch is what makes this verb possible, and it now exists (demo:26). Without it
+    # the script would reach start_hub and boot a second hub inside this throwaway
+    # `compose run --rm` container — on a port nothing publishes, dying with the container.
     #
-    # Running it in the container is still the right shape: unzip and the dataset tree copy
-    # then happen inside, which is what keeps zip/unzip off the host requirement list.
+    # Running it in the container is the right shape: unzip and the dataset tree copy then
+    # happen inside, which is what keeps zip/unzip off the host requirement list. The data
+    # lands on the bind mount, so the hub started by `./cr up` sees it on reload.
     dc --profile dev run --rm health ./demo --no-launch "$@" \
       || die "demo failed.
-If the error is 'unknown option: --no-launch', the ./demo change this verb depends on has not
-landed yet — that flag does not exist in the current tree. Until it does, load the demo data
-on the host with ./demo and then ./cr up.
-If the error is about demodataset.zip, it needs to be in the checkout root."
+If the error is about demodataset.zip, it needs to be in the checkout root — it ships
+separately and is never committed. See demo-data/README.md."
     say "demo data loaded. reload $url in the browser."
     ;;
 
   health)
-    # ARGS ARE FORWARDED VERBATIM, and nothing is added.
+    # ARGS ARE FORWARDED VERBATIM, and nothing is added — including --strict.
     #
-    # The draft passed --strict. THAT FLAG DOES NOT EXIST: health's option loop parses only
-    # --quick, --live, --fix and -h/--help, and `die`s on anything else — so `./cr health`
-    # would have
-    # failed on its first line, every time. Once --strict lands (it is what turns the four
-    # git-dependent skips and the unverified off-loopback check into failures rather than
-    # silently-ignored skips), pass it yourself: `./cr health --strict --live`.
+    # An earlier draft of this script passed --strict itself. It is deliberately NOT added
+    # back now that the flag exists, because --strict turns the four git-dependent skips and
+    # the unverified off-loopback check into hard failures, and a maintainer running
+    # `./cr health` to see where they stand should not get a red run for a property they
+    # never opted into checking. CI and the release gate ask for it explicitly:
+    #
+    #   ./cr health --strict          what CI runs
+    #   ./cr health --strict --live   the release gate
     #
     # verify-loopback runs FIRST, on the HOST, and its result is handed in: inside the health
     # container the off-loopback check cannot see the host listener at all.

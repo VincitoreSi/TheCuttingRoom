@@ -5,6 +5,7 @@
 #   ./demo                 unpack + load the dataset, set up if needed, launch
 #   ./demo --keep          launch without overwriting data already on disk
 #   ./demo --port 9000     prefer a specific port
+#   ./demo --no-launch     load the dataset and stop, starting no hub
 #
 # The dataset is NOT in this repo — it ships separately as demodataset.zip (real scraped
 # content, shared privately). Put that zip in the repo root and ./demo unpacks it into
@@ -24,12 +25,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 DEMO_DATA="$ROOT/demo-data/data"
 KEEP=0; PREFERRED_PORT=""   # empty = ask claim_port for this checkout's pin
+NO_LAUNCH=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --keep)    KEEP=1 ;;
-    --port)    PREFERRED_PORT="${2:?--port needs a number}"; shift ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *)         die "unknown option: $1 (try --help)" ;;
+    --keep)       KEEP=1 ;;
+    --no-launch)  NO_LAUNCH=1 ;;
+    --port)       PREFERRED_PORT="${2:?--port needs a number}"; shift ;;
+    -h|--help)    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)            die "unknown option: $1 (try --help)" ;;
   esac
   shift
 done
@@ -116,6 +119,22 @@ PY
 fi
 
 # ---------------------------------------------------------------- 4. launch
+# --no-launch stops here, with the dataset on disk and no hub started.
+#
+# It exists for the container lane. `./cr demo` runs this script inside the dev image so that
+# unzip and the tree copy happen in the container — which is what keeps zip/unzip off the
+# host requirement list — but that container is a one-shot `compose run --rm`, not the hub
+# service. Letting it reach start_hub would boot a SECOND hub inside a throwaway container,
+# on a port nothing publishes, which then dies with the container. The data is on the bind
+# mount either way, so the already-running `./cr up` hub picks it up on reload.
+if [ "$NO_LAUNCH" -eq 1 ]; then
+  printf '\n'
+  ok "dataset loaded — no hub started (--no-launch)"
+  say "${_D}reload the hub in your browser, or run ./init to start one${_R}"
+  printf '\n'
+  exit 0
+fi
+
 step "Starting the hub"
 [ -n "$PREFERRED_PORT" ] || PREFERRED_PORT="$(claim_port)"   # this checkout's own port
 URL="http://127.0.0.1:$PREFERRED_PORT"

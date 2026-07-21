@@ -124,6 +124,29 @@ Each agent (AnalysisEngine, AutoSearch, SimilarContent, …) is its own director
 own `.env.example`; `uv sync` then `uv run cli.py …` inside it. See `./docsite` for the full
 quickstart, API reference, and per-agent guides.
 
+### Run it in Docker
+
+If you'd rather install nothing but Docker — no uv, no Python, no Node, no ffmpeg — there is a
+container lane. One image, one container, and `./cr` as the only host-side command:
+
+```bash
+./cr build      # 86s cold, measured; 305.8 MB image / 92 MB to pull
+./cr up         # start the hub and open the browser (does NOT rebuild)
+./cr down       # stop the container; your data is on the bind mount and is untouched
+./cr agent similar-content propose --platform instagram --dry-run
+./cr health --strict --live
+./cr help       # works on a machine with no Docker installed
+```
+
+Your checkout is bind-mounted, so keys stay in each agent's own `.env` and the hub still never
+stores a secret value. Windows is **WSL2 only** — clone inside the WSL2 filesystem; there is no
+`cr.cmd`. The hub has no authentication, so compose publishes it on `127.0.0.1` and `[::1]`
+only: changing that to `"8787:8787"` puts an unauthenticated subprocess launcher on your LAN.
+`./cr verify-loopback` proves the boundary on the machine in front of you.
+
+Full details — per-platform first run, the `./cr` reference, volumes, upgrades, the security
+posture and the known sharp edges — in [Run it in Docker](documentation/docs/docker.md).
+
 ## What you need, and what runs where
 
 **Nothing here requires Claude Code, an editor, or an AI coding session.** Every stage is a

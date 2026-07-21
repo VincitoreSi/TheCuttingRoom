@@ -14,8 +14,12 @@ on:
       - ".github/workflows/docs.yml"
   workflow_dispatch:
 
+# Deployments to main serialize against each other (never cancel a deploy that is mid-flight —
+# Pages ends up serving a half-uploaded artifact), but a PR's build-only run has no reason to
+# queue behind them. Keying on the ref gives every PR its own lane while all pushes to main
+# still share one.
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -41,10 +45,15 @@ jobs:
 
       # Build through ReelScraper's dev dependency group rather than a bare
       # `pip install mkdocs mkdocs-material`. That group pins the versions (mkdocs>=1.6.1,
-      # mkdocs-material>=9.7.7) and is the exact command `./docsite` and `health:114` run, so
+      # mkdocs-material>=9.7.7) and is the exact command `./docsite` and `./health` run, so
       # the site CI publishes cannot drift from the one built locally.
+      #
+      # --strict because this job DEPLOYS. Without it a dead cross-reference or a nav entry
+      # pointing at a renamed file is a WARNING, the build exits 0, and the broken page goes
+      # live — the failure is then discovered by a reader rather than by review. `./health`
+      # runs the same flag, so a PR cannot be green locally and broken here.
       - name: Build site
-        run: uv run --project ReelScraper mkdocs build -f documentation/mkdocs.yml
+        run: uv run --project ReelScraper mkdocs build -f documentation/mkdocs.yml --strict
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

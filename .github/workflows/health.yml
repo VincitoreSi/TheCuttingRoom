@@ -73,5 +73,12 @@ jobs:
 
       # No --quick (that skips builds and docs) and no --live (that boots the hub and hits
       # the network). ./health already exits non-zero on any failure.
+      #
+      # --strict because this is the gate. Four invariants — the tracked-.env check, the
+      # history secret scan, the demo-dataset check and the working-data ignore check — all
+      # degrade to SKIPS when git cannot be read, and the run still prints HEALTHY. Nobody
+      # reads a skip counter, so in CI those skips must be failures: a green required check
+      # that quietly stopped scanning history for keys is worse than no check. Locally
+      # `./health` keeps degrading gracefully, which is correct for a tarball or an archive.
       - name: Run ./health
-        run: ./health
+        run: ./health --strict
