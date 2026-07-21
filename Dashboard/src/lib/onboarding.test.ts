@@ -23,6 +23,7 @@ const summary = (over: Partial<PlatformSummary> = {}): PlatformSummary => ({
   creators: 0,
   viral: 0,
   media_ready: 0,
+  analyzed: 0,
   ...over,
 });
 

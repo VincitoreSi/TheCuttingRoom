@@ -44,6 +44,9 @@ export interface PlatformSummary {
   creators: number;
   viral: number;
   media_ready: number;
+  /** corpus rows that already have a blueprint. Polled, so it moves DURING a run —
+      unlike the analysis query, which only refetches once the job settles. */
+  analyzed: number;
 }
 
 export interface Reel {

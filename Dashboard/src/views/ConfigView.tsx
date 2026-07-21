@@ -55,9 +55,18 @@ export function ConfigView() {
     if (focusHandled.current || !cfg) return; // wait until the watchlist is actually rendered
     if (consumeConfigFocus() !== "pages") return;
     focusHandled.current = true;
-    // preventScroll: focus must never move the viewport — an unguarded focus scroll
-    // moved the window and blanked the whole shell (sidebar included).
-    const t = setTimeout(() => addHandleRef.current?.focus({ preventScroll: true }), 600);
+    // Bring the watchlist INTO VIEW, then focus it. Focusing alone (with preventScroll,
+    // which is still required — an unguarded focus scroll once moved the window and
+    // blanked the whole shell, sidebar included) left someone who had just clicked
+    // "Add pages" staring at the virality weights, with the thing they asked for
+    // several screens below. scrollIntoView on the section scrolls the app's own scroll
+    // container rather than the window, so it does not reproduce that bug.
+    const t = setTimeout(() => {
+      document
+        .getElementById("config-pages")
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      addHandleRef.current?.focus({ preventScroll: true });
+    }, 600);
     return () => clearTimeout(t);
   }, [cfg]);
 

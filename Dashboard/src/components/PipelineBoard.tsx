@@ -12,6 +12,7 @@ import { Seam } from "./Seam";
 import { IconArrowRight, IconPlay, IconTape } from "./icons";
 import type { PlatformSummary, Stage, StageReadiness } from "../lib/types";
 import type { ViewKey } from "./Sidebar";
+import { requestConfigFocus } from "../lib/nav";
 import { cx } from "../lib/cx";
 
 /* Seven marks on the tape (§11). Sources & Studio are informational nodes;
@@ -38,6 +39,11 @@ type NodeDef = {
   agentDesk?: string;
   /* the clickable affordance label (defaults to a view-link CTA otherwise). */
   cta?: string;
+  /* Sources is not a runnable stage — its "input" is a human adding handles. This gives
+     it the same bottom-slot button every other card has, pointing at the one place that
+     changes its count. Without it the first node in the chain a new user has to act on
+     was the only one with nothing to click. */
+  addTo?: { view: ViewKey; focus: string; label: string };
 };
 const NODES: NodeDef[] = [
   {
@@ -49,7 +55,12 @@ const NODES: NodeDef[] = [
     agentDesk: "auto-search",
     cta: "Open desk",
   },
-  { key: "sources", label: "Sources", hint: "handpicked pages" },
+  {
+    key: "sources",
+    label: "Sources",
+    hint: "handpicked pages",
+    addTo: { view: "config", focus: "pages", label: "Add pages" },
+  },
   { key: "scrape", label: "Scrape", stage: "scrape", hint: "pull reels (guest)" },
   { key: "analyze", label: "Analyze", stage: "analyze", hint: "score 4 signals" },
   { key: "media", label: "Media", stage: "media", hint: "persist top clips" },
@@ -107,7 +118,15 @@ export function PipelineBoard({
     scrape: summary ? plural(summary.scraped_items, "reel") : "—",
     analyze: summary ? `${summary.items} scored · ${summary.viral} viral` : "—",
     media: summary ? `${summary.media_ready} saved` : "—",
-    blueprint: analysisQ.data ? plural(analyzedCount, "blueprint") : "—",
+    // `summary` is polled every 15s, the analysis query only refetches when a job
+    // settles — so during a blueprint run this node sat on "0 blueprints" while the
+    // hub already knew about several. Prefer the live number, fall back to the query
+    // (which excludes reference clips) before the summary has loaded.
+    blueprint: summary
+      ? plural(summary.analyzed, "blueprint")
+      : analysisQ.data
+        ? plural(analyzedCount, "blueprint")
+        : "—",
     studio: studioQ.data ? plural(studioQ.data.length, "proposal") : "—",
   };
 
@@ -224,6 +243,20 @@ export function PipelineBoard({
                     readiness={summary?.readiness?.[node.stage]}
                     onRun={(s) => run.mutate(s)}
                   />
+                ) : node.addTo && onNavigate ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="board__run mt-auto"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      requestConfigFocus(node.addTo!.focus);
+                      onNavigate(node.addTo!.view);
+                    }}
+                    title="Open the watchlist in Config and add an Instagram handle"
+                  >
+                    {node.addTo.label} <IconArrowRight size={12} />
+                  </Button>
                 ) : clickable ? (
                   <span className="board__link-hint eyebrow mt-auto">
                     {node.cta ?? "Open"} <IconArrowRight size={12} />
