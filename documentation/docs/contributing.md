@@ -158,4 +158,4 @@ pi/
 └── _producer-template/     the scaffold — start here for a new producer
 ```
 
-Every directory under `pi/` other than `ReelScraper/` is an independent, uv-managed project that talks to the hub purely over HTTP. See [Architecture](architecture.md) for how the pieces fit together and the [Pipeline](architecture.md) page for how a piece of content moves through all seven stages.
+Every directory under `pi/` other than `ReelScraper/` is an independent, uv-managed project that talks to the hub purely over HTTP. See [Architecture](architecture.md) for how the pieces fit together and the [Pipeline](architecture.md) page for how a piece of content moves through all eight stages.

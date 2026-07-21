@@ -59,7 +59,7 @@ This boots the FastAPI hub and opens the Dashboard at **http://127.0.0.1:8787**.
 
 ## Run the pipeline end-to-end
 
-The pipeline is seven stages. Discover and Sources feed the handle list; Scrape through Studio turn that list into gated, publishable content.
+The pipeline is eight stages. Discover and Sources feed the handle list; Scrape through Studio turn that list into gated, publishable content.
 
 ```mermaid
 flowchart LR
@@ -226,7 +226,7 @@ The Dashboard ("The Cutting Room") is a React 18 + TypeScript + Vite control boa
 
 | Tab | What it shows |
 |---|---|
-| **Board** | The 7-stage pipeline as a live board; per-agent workflow lanes reduced from the central log (`GET /api/agents/{name}/board`) |
+| **Board** | The 8-stage pipeline as a live board; per-agent workflow lanes reduced from the central log (`GET /api/agents/{name}/board`) |
 | **Corpus** | Scraped + scored content: virality factors, top-N clips, narrative briefs, and full-text search over the corpus |
 | **Sounds** | Trending-audio table — adoption velocity within tracked creators, bucketed Rising/Hot/Saturated/Evergreen |
 | **Studio** | Producer proposals awaiting the human gate — approve or reject generated content before it posts |

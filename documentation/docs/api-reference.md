@@ -679,4 +679,4 @@ Two smaller resource groups worth knowing about, referenced elsewhere in this re
 
 - [Architecture](architecture.md) — component ownership and on-disk storage layout behind this API.
 - [Agent Call Flows](architecture.md) — the exact sequence of calls each agent makes against this contract.
-- [Pipeline Stages](architecture.md) — how these endpoints compose into the 7-stage Discover → Studio pipeline.
+- [Pipeline Stages](architecture.md) — how these endpoints compose into the 8-stage Discover → Studio pipeline.

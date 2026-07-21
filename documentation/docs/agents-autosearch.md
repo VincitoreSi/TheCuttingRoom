@@ -188,6 +188,6 @@ If `ANTHROPIC_API_KEY` is absent, term expansion falls back to seed keywords ver
 
 - [Safety & Guardrails](agents-autosearch.md) — the full non-negotiable contract this page summarizes.
 - [Architecture](architecture.md) — how AutoSearch fits alongside the hub and other agents.
-- [Pipeline](architecture.md) — the 7-stage Discover → Studio flow.
+- [Pipeline](architecture.md) — the 8-stage Discover → Studio flow.
 - [Agent Registry & SPI](agents-producers.md) — the shared manifest/config/secrets contract every agent implements.
 - [Observability & Logging](concepts.md) — the `item.*`/`run.*` event vocabulary and board reducer.

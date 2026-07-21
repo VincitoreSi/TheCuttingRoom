@@ -7,6 +7,16 @@
   "produces": "studio_markdown",
   "output_status": "proposed",
   "workflow_stages": ["Queued", "Generating", "Self-eval", "Proposed", "Approved", "Rejected"],
+
+  "_comment_capabilities": "The two OPTIONAL launch capabilities. The hub hardcodes no producer name or path — it executes only what you declare here, and only if `dir` resolves to a direct sibling of the hub repo. Delete whichever you do not implement; a producer that only writes markdown by hand needs neither. They are deliberately SEPARATE: proposing reads the corpus and writes markdown into the human gate and costs nothing, while rendering spends image-API credits per frame — so the free, unattended trigger must never be gated on, or grantable by, the paid one.",
+
+  "renderable": false,
+  "dir": "<ThisDirectoryName>",
+  "render_cmd": ["uv", "run", "cli.py", "render"],
+
+  "proposes": false,
+  "propose_cmd": ["uv", "run", "cli.py"],
+
   "config_schema": {
     "type": "object",
     "title": "<AGENT_NAME> config",

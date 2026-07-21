@@ -35,7 +35,8 @@ Every producer differs only in **strategy** and **declared inputs**; the contrac
 2. **Declares a manifest** (`agent.json`) and **self-registers** on startup:
    `POST /api/producers/register` with
    `{ name, kind, consumes[], human_gate, needs_reference, produces, output_status, config_schema, secrets:[{name,env_var,required}] }`
-   — plus `renderable` / `dir` / `render_cmd` if it renders (see below). Idempotent by `name`.
+   — plus `dir` and either capability pair, `renderable`/`render_cmd` or `proposes`/`propose_cmd`
+   (see below). Idempotent by `name`.
 3. **Reads only these hub inputs** (per its `consumes`):
    `GET /api/corpus/{p}/{factors|brief|top|search}`, `GET /api/analysis/{p}[/{content_id}]`,
    `GET /api/audio/{p}/trending`, `GET /api/insights`. Reference-driven agents additionally read
@@ -71,6 +72,35 @@ extra manifest fields, and the hub will launch it on one approved item at a time
 
 Also extend `workflow_stages[]` past the gate, e.g.
 `[..., "Proposed", "Approved", "Rendering", "Rendered", "Rejected"]`.
+
+## Optional: the propose surface (letting the pipeline ask you for proposals)
+
+Rendering is one capability; **proposing is a second, separate one**:
+
+```json
+{ "proposes": true, "dir": "<ThisDirectoryName>", "propose_cmd": ["uv", "run", "cli.py"] }
+```
+
+| Field | Rule |
+|---|---|
+| `proposes` | `true` opts into `POST /api/pipeline/{p}/propose` — the `propose` pipeline stage, and the boundary the **cascading heartbeat** fires unattended. |
+| `dir` | Same field and the same direct-sibling rule as the render surface. Declare it once. |
+| `propose_cmd` | The argv prefix the hub runs there. **The hub appends `propose --platform <p>` itself and will not take a subcommand from you** — so a manifest cannot name a paid verb here and get it launched. Same launcher allowlist and argument pattern as `render_cmd`. |
+
+**Why this is not just `renderable` reused.** Proposing reads the corpus and blueprints and
+writes markdown into the human gate: it costs nothing. Rendering spends image-API credits per
+frame. If one flag granted both, a producer that only wanted to be proposable would have to
+declare itself renderable — and the free, unattended cascade trigger would be gated on a paid
+capability. The hub keeps them apart deliberately (`_producer_dir(agent, capability=...)`).
+
+**Exactly one** registered producer may declare `proposes: true`. Zero and several are both
+**refused with a 409** rather than guessed — the cascade fires this unattended, and an
+unattended trigger that picks an agent at random is not a feature. Either way the reason
+surfaces as `propose_agent_problem` in `GET /api/cascade`, which is what an operator sees when
+the last boundary can never fire.
+
+If you implement it, honour `--count N` (how many recipes to publish in one firing; the cascade
+passes it) and give it a `--dry-run` that shows the picks and writes nothing.
 
 **The render half is a SEPARATE, human-triggered invocation.** It typically costs money per item, so it must
 never run as part of your normal generate pass and never be added to the one-click pipeline. Implement it as

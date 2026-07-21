@@ -78,7 +78,7 @@ The board is organized around the pipeline's stages and the hub's resource group
 | Playbook | `GET/POST /api/insights`, `GET /api/corpus/{platform}/factors` | the winning formula, the ranked lift field, and the shared cross-agent memory exchange |
 | Config | `GET/PUT /api/config/{platform}`, `GET/PUT /api/schedule[/{platform}]` | the Bench — niche weights, keywords, `pages.txt`, and automatic runs |
 
-See [Pipeline](architecture.md) for how these views map onto the seven pipeline stages, and [API Reference](api-reference.md) for the full route contract.
+See [Pipeline](architecture.md) for how these views map onto the eight pipeline stages, and [API Reference](api-reference.md) for the full route contract.
 
 ## The Board
 
@@ -252,7 +252,7 @@ The Dashboard's visual identity leans into its subject matter — a cutting room
 ## Related pages
 
 - [Architecture](architecture.md) — the hub as the single integration point, static mounts, storage layout
-- [Pipeline](architecture.md) — the seven-stage pipeline the Dashboard's views are organized around
+- [Pipeline](architecture.md) — the eight-stage pipeline the Dashboard's views are organized around
 - [API Reference](api-reference.md) — full `/api/*` route contract, including `/api/events` and `/api/agents/{name}/board`
 - [Agents: Producers](agents-producers.md) — the producer SPI and `_producer-template`
 - [Agents: Registry](agents-producers.md) — the producer registry contract in depth

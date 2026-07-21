@@ -175,6 +175,34 @@ The rendered reel appears in **Studio → Renders** with its sound sheet, a gene
 and the on-disk path to upload by hand. Instagram has no post API for this, so the last step
 is deliberately manual.
 
+### Letting it run itself
+
+Doing that by hand once is how you learn the pipeline. After that, two mechanisms run it
+unattended, both **off by default** and both per-platform:
+
+- **A timer** — every N hours, run `scrape → analyze → media`.
+- **The cascading heartbeat** — a 60s tick that watches how much *new* material has landed
+  and fires the next stage that has enough to chew on.
+
+You size the heartbeat as a funnel: one batch (`scrape_count`, 250 reels by default), then
+how much of each stage's input is worth passing to the next — 100% analyzed, 60% worth
+downloading, 20% of those worth a blueprint, 20% of those worth proposing against. Because
+no percentage can exceed 100, **a later stage can never be configured to fire more often
+than the one feeding it**; the funnel only ever narrows.
+
+Two things it will never do. It never runs `render`, which is the only step that spends
+money per frame — that stays behind a human click, by construction rather than by config.
+And the blueprint stage costs Gemini credits, so it sits behind its own explicit opt-in and
+stamps its watermark when you enable it, meaning switching it on starts the clock rather
+than settling months of backlog in one unattended burst.
+
+Any running stage can be cut short from the board — the Stop button on a running card. Stops
+are cooperative: scrapers finish the creator they are on and save, so a stop keeps everything
+already written instead of discarding the run.
+
+Both are configured in the Dashboard (**Config**), or over the API — see
+[the cascade](documentation/docs/api-reference.md#the-cascade).
+
 ## The one principle
 
 The FastAPI hub inside **ReelScraper** (`http://127.0.0.1:8787`) is the **single

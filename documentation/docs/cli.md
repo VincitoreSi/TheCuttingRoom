@@ -324,6 +324,6 @@ gate contract.
 ## See also
 
 - [Architecture](architecture.md) — how the hub, agents, and Dashboard fit together.
-- [Pipeline](architecture.md) — the 7-stage Discover → Studio flow these commands drive.
+- [Pipeline](architecture.md) — the 8-stage Discover → Studio flow these commands drive.
 - [API Reference](api-reference.md) — the full `/api/*` contract every CLI talks to.
 - [Agents](agents-reelscraper.md) — per-agent call sequences (AnalysisEngine, SimilarContent, AutoSearch).

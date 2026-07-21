@@ -26,7 +26,7 @@ This keeps the scraper's footprint indistinguishable from an anonymous visitor b
 
 ## The three stages
 
-ReelScraper's own slice of the [7-stage pipeline](architecture.md) is stages 3–5: Scrape, Analyze, Media.
+ReelScraper's own slice of the [8-stage pipeline](architecture.md) is stages 3–5: Scrape, Analyze, Media.
 
 ### Scrape
 
