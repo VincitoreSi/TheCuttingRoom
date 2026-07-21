@@ -37,6 +37,10 @@ export function deriveOnboarding(args: {
   // live job ledger lets us check each stage off the instant its job finishes —
   // before the next stage has run — which is what makes the checklist feel live.
   const hasCorpus = (summary?.items ?? 0) > 0;
+  // Raw output on disk is the durable signal for scrape ALONE. The job ledger is
+  // in-memory, so after a hub restart a finished scrape left no evidence and this
+  // checklist sent the user back to re-pull reels it already had.
+  const hasScraped = summary?.scraped ?? false;
 
   const steps: OnboardingStep[] = [
     {
@@ -49,7 +53,7 @@ export function deriveOnboarding(args: {
       key: "scrape",
       label: "Run Scrape",
       hint: "Pull recent reels from your watchlisted creators (guest mode — no login).",
-      done: hasCorpus || jobDone("scrape"),
+      done: hasCorpus || hasScraped || jobDone("scrape"),
     },
     {
       key: "analyze",

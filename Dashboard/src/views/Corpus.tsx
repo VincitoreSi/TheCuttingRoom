@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { useShell } from "../App";
-import { useContent, useEvals, useFactors } from "../lib/hooks";
+import { useContent, useEvals, useFactors, usePlatforms, useRunStage } from "../lib/hooks";
 import { VirtualReelGrid } from "../components/VirtualReelGrid";
 import { ReelModal } from "../components/ReelModal";
-import { Card, EmptyState, Eyebrow, Input, Select } from "../components/ui";
-import { IconCorpus, IconSearch } from "../components/icons";
+import { Button, Card, EmptyState, Eyebrow, Input, Select } from "../components/ui";
+import { IconCorpus, IconPlay, IconSearch } from "../components/icons";
 import { grouped } from "../lib/format";
 import { recordScore } from "../lib/evalModel";
+import { deriveCorpusEmpty } from "../lib/corpusEmpty";
 import type { Factor, Reel } from "../lib/types";
 import { cx } from "../lib/cx";
 
@@ -27,6 +28,10 @@ type Analyzed = "all" | "yes" | "no";
 export function Corpus() {
   const { platform } = useShell();
   const contentQ = useContent(platform);
+  // `scraped` separates "nobody has scraped this" from "scraped, never analyzed" — two
+  // states this grid renders identically (as nothing) but which need opposite advice.
+  const summary = usePlatforms().data?.find((p) => p.platform === platform);
+  const runStage = useRunStage(platform);
   // join AnalysisEngine self-eval scores (per blueprint) onto the corpus rows
   const evalsQ = useEvals({ target_type: "blueprint" });
   const [tab, setTab] = useState<"reels" | "factors">("reels");
@@ -94,6 +99,12 @@ export function Corpus() {
     out = [...out].sort((a, b) => key(b) - key(a));
     return out;
   }, [reels, q, sort, tierFilter, analyzed]);
+
+  const empty = deriveCorpusEmpty({
+    total: reels.length,
+    filtered: filtered.length,
+    scraped: summary?.scraped ?? false,
+  });
 
   return (
     <div className="flex flex-col gap-4">
@@ -171,11 +182,24 @@ export function Corpus() {
 
           {contentQ.isLoading ? (
             <GridSkeleton />
-          ) : filtered.length === 0 ? (
+          ) : empty ? (
             <EmptyState
               icon={<IconCorpus size={28} />}
-              title="No reels match"
-              hint="Loosen the filter, or run Scrape from the Board to mine this platform's handpicked pages."
+              title={empty.title}
+              hint={empty.hint}
+              action={
+                empty.run && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => runStage.mutate(empty.run!)}
+                    disabled={runStage.isPending}
+                  >
+                    <IconPlay size={14} />
+                    {runStage.isPending ? "Running…" : `Run ${empty.run}`}
+                  </Button>
+                )
+              }
             />
           ) : (
             <VirtualReelGrid reels={filtered} onOpen={setOpen} />

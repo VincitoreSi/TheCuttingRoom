@@ -434,6 +434,22 @@ def _push_log(rec):
             del _LOG_BUF[:-_LOG_MAX]
 
 # ---------------- meta ----------------
+def _has_raw_scrape(platform) -> bool:
+    """Has a scrape left raw output on disk for this platform?
+
+    `scrape` and the board do not share a file: scrape writes `<content>_raw*.json`, and
+    only `analyze` turns that into the `content.json` the board reads. Without this,
+    "scraped 250 reels, never analyzed" and "never scraped anything" are the same
+    response — so a finished scrape looks like a scrape that found nothing, and every
+    empty-state in the Dashboard tells you to run the stage you just ran.
+
+    Matched by convention rather than by name: instagram writes reels_raw*.json, x
+    posts_raw*.json, youtube shorts_raw*.json, and a sharded run adds _2, _3. Keying this
+    to one platform's filename would report the other two as never scraped.
+    """
+    return any(pdir(platform).glob("*_raw*.json"))
+
+
 @app.get("/api/platforms")
 def platforms():
     out = []
@@ -441,6 +457,11 @@ def platforms():
         rows = _content(p)
         out.append({
             "platform": p, "has_data": bool(rows),
+            # Raw scrape output on disk. Distinct from has_data, which means a SCORED
+            # corpus exists; the gap between the two is exactly the analyze stage.
+            # Read off the filesystem so it survives a hub restart — the job ledger,
+            # the only other evidence a scrape had run, is in-memory and does not.
+            "scraped": _has_raw_scrape(p),
             "items": len(rows), "creators": len({r["creator"] for r in rows}),
             "viral": sum(1 for r in rows if r.get("tier") == "Viral"),
             "media_ready": sum(1 for r in rows if r.get("video_local")),

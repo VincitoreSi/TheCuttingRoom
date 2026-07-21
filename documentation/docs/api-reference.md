@@ -25,7 +25,7 @@ Three IDs tie the whole surface together. Keep them in view while reading the ta
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/platforms` | List supported platforms (`instagram`, `x`, `youtube`). |
+| `GET /api/platforms` | List supported platforms (`instagram`, `x`, `youtube`) with a per-platform summary: `items`, `creators`, `viral`, `media_ready`, `analyzed`, plus two distinct readiness flags — **`scraped`** (raw `*_raw*.json` output is on disk) and **`has_data`** (a *scored* corpus exists). `scraped && !has_data` means the scrape finished but `analyze` has not run: reels are on disk, nothing has ranked them, and every corpus view will be empty until it does. `scraped` is read from the filesystem, so it survives a hub restart — the job ledger does not. |
 
 ---
 

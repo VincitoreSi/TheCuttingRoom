@@ -70,7 +70,15 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKey) => void }) 
           right={
             <div className="flex items-center gap-3">
               <span className="eyebrow hidden sm:block">
-                {platform} · {summary?.has_data ? "corpus loaded" : "no data"}
+                {/* "no data" was also what a finished-but-unanalyzed scrape reported,
+                    which reads as "the scrape found nothing" rather than "nothing has
+                    scored it yet". Three states, three labels. */}
+                {platform} ·{" "}
+                {summary?.has_data
+                  ? "corpus loaded"
+                  : summary?.scraped
+                    ? "scraped · not analyzed"
+                    : "no data"}
               </span>
               <Button
                 variant="primary"

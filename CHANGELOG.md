@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A finished scrape that had not been analyzed yet was reported as if it had found
+  nothing. `scrape` writes `<content>_raw*.json`; only `analyze` turns that into the
+  `content.json` every corpus view reads — so with 250 reels sitting on disk,
+  `/api/platforms` still said `has_data: false, items: 0`, the Board said "no data",
+  and the reel grid said "No reels match — run Scrape", pointing the user back at the
+  stage they had just watched finish. `/api/platforms` now also returns **`scraped`**,
+  read off the filesystem so it survives a hub restart, and the Dashboard uses it to
+  tell the two states apart: the empty grid now says "Scraped, not scored yet" and
+  offers a Run analyze button. The first-run checklist uses it too, so a hub restart no
+  longer walks you back to re-scraping reels you already have.
+
 ### Changed
 - The "Building the dashboard…" page now links to the published documentation site
   instead of the hub's own `/docs` Swagger UI. Swagger answers "what endpoints

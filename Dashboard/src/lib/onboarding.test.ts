@@ -15,6 +15,7 @@ const job = (stage: string, status: Job["status"]): Job => ({
 const summary = (over: Partial<PlatformSummary> = {}): PlatformSummary => ({
   platform: "instagram",
   has_data: false,
+  scraped: false,
   items: 0,
   creators: 0,
   viral: 0,
@@ -47,6 +48,20 @@ describe("deriveOnboarding", () => {
     });
     expect(ob.steps[1].done).toBe(true); // scrape
     expect(ob.steps[2].done).toBe(false); // analyze
+    expect(ob.activeIndex).toBe(2);
+  });
+
+  it("raw scrape output on disk checks scrape off with an empty job ledger", () => {
+    // The ledger is in-memory: restart the hub and a finished scrape leaves no trace in
+    // it. The checklist used to walk the user back to "Run Scrape" and re-pull reels
+    // that were already sitting on disk. `scraped` comes off the filesystem instead.
+    const ob = deriveOnboarding({
+      pagesCount: 1,
+      summary: summary({ scraped: true }),
+      jobs: [],
+    });
+    expect(ob.steps[1].done).toBe(true); // scrape
+    expect(ob.steps[2].done).toBe(false); // analyze — the real next move
     expect(ob.activeIndex).toBe(2);
   });
 

@@ -20,7 +20,10 @@ export type JobStatus = "queued" | "running" | "done" | "error";
 
 export interface PlatformSummary {
   platform: string;
+  /** a SCORED corpus exists — i.e. analyze has run. Not "a scrape has run"; see `scraped`. */
   has_data: boolean;
+  /** raw scrape output is on disk. `scraped && !has_data` means analyze has not run yet. */
+  scraped: boolean;
   items: number;
   creators: number;
   viral: number;
