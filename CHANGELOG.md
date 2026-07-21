@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Nothing yet.
 
-## [1.0.0] - 2026-07-20
+## [1.0.0] - 2026-07-21
 
 First release. A multi-agent content pipeline: scrape handpicked creators, score
 every post for virality, break the winners into generation-ready blueprints, and
@@ -47,6 +47,20 @@ spin those into ready-to-post drafts behind a human gate.
   CODE_OF_CONDUCT, SECURITY, and ROADMAP.
 
 ### Security
+- Pre-publication audit before the first public push. Test fixtures no longer carry real
+  creator handles, captions, content IDs or audio metadata — `SimilarContent` and the
+  Dashboard suites now select fixtures by *shape* (shot count, on-screen-text structure),
+  which removes the third-party data and makes the tests run against any operator's corpus
+  instead of one specific dataset.
+- `.gitignore` now covers the scored corpus (`platforms/*/content.json`), the CSV/xlsx/raw
+  exports, `memory/shared/insights.jsonl` and the `renders/` sidecars. `./demo` copies the
+  private dataset into exactly those paths, so previously a single `./demo` followed by
+  `git add -A` could have published it. `./health` checks all of them by path.
+- `POST /api/reference/{platform}` validates the supplied URL: http(s) only, and the host is
+  resolved and rejected if it lands on a private, loopback or link-local address. Previously
+  `urllib.request` would honour `file://`, writing arbitrary local files into the
+  `/media`-served directory, and could reach the cloud metadata service.
+- Third-party GitHub Actions pinned to full commit SHAs.
 - Secrets are declared by env-var **name** only and read from gitignored per-agent
   `.env` files. The hub surfaces secret *status* (present/absent) and never stores or
   returns a value.

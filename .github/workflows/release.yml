@@ -16,7 +16,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # NO release assets, deliberately. `demodataset.zip` is real scraped content — real
+      # creator handles, captions, engagement metrics and media — and a public repo's release
+      # assets are downloadable by anyone. Attaching it would expose third-party personal data
+      # without consent and breach Instagram's terms. It is shared privately on request; see
+      # demo-data/README.md and the "Non-goals" section of ROADMAP.md. Do not add `files:`.
       - name: Create release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
           generate_release_notes: true
+          body: |
+            See [CHANGELOG.md](https://github.com/VincitoreSi/TheCuttingRoom/blob/main/CHANGELOG.md)
+            for the full entry, and the [documentation](https://VincitoreSi.github.io/TheCuttingRoom/)
+            to get started.
+
+            ```bash
+            ./init      # setup + an empty hub — the real first run
+            ./docsite   # build + serve the docs locally
+            ./health    # every test suite, build, and repository invariant
+            ```
+
+            ### Demo dataset
+
+            **This release has no dataset attachment, by design.** `demodataset.zip` is real
+            scraped content — real creator handles, captions, engagement metrics and media — so
+            publishing it would expose third-party personal data without consent and would
+            breach Instagram's terms. It is shared privately on request: open a
+            [Discussion](https://github.com/VincitoreSi/TheCuttingRoom/discussions).
+
+            You do not need it. `./init` gives a clean start you fill with your own watchlist,
+            and nothing in the pipeline depends on the dataset — it only pre-populates `./demo`.
+            See [`demo-data/README.md`](https://github.com/VincitoreSi/TheCuttingRoom/blob/main/demo-data/README.md).
+
+            ---
