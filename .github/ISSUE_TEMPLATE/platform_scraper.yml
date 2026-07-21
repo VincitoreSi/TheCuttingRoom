@@ -1,0 +1,83 @@
+name: Platform scraper
+description: Add a new platform scraper, or deepen an existing one toward Instagram parity
+labels: ["enhancement", "platform"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A platform lives in `ReelScraper/platforms/<p>/` as four files: `scrape.py`,
+        `normalize.py` (the ONLY platform-specific mapping), a 3-line `run.py` wrapper around
+        `core/runner.py`, and `niche_config.json`. Everything else — the virality engine,
+        memory, and reports — is inherited from `core/`.
+
+        **Do not include any session cookie, auth token, or API key** in this issue.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - X (deepen the existing scraper)
+        - YouTube (deepen the existing scraper)
+        - Instagram (the reference implementation)
+        - TikTok (new)
+        - Other (new)
+    validations:
+      required: true
+  - type: dropdown
+    id: access
+    attributes:
+      label: Access model
+      description: How does the scraper reach the data? This decides the safety rules that apply.
+      options:
+        - Keyless / public API (like YouTube InnerTube)
+        - Guest mode, no login (like Instagram)
+        - Burner session required (like X)
+        - Official API with a key
+        - Not sure yet
+    validations:
+      required: true
+  - type: checkboxes
+    id: stages
+    attributes:
+      label: Which stage(s) does this touch?
+      options:
+        - label: "`scrape.py` — fetching raw posts"
+        - label: "`normalize.py` — raw → `core.schema.Content`"
+        - label: "`run.py` / `niche_config.json` — wiring and tuning"
+        - label: "Offline test fixtures"
+  - type: textarea
+    id: metrics
+    attributes:
+      label: Which virality signals are derivable?
+      description: |
+        The engine blends four signals. Say which the platform's metrics actually support and
+        which have no equivalent — a signal that cannot be computed must be weighted out in
+        `niche_config.json`, not faked.
+      value: |
+        - engagement_rate — (likes+comments+shares+saves) / followers:
+        - reach_multiplier — plays / followers:
+        - outlier_score — plays / creator's median plays:
+        - velocity — plays / days since posting:
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What needs to change?
+      description: The gap today and what "done" looks like.
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety
+      description: These are non-negotiable rules from CLAUDE.md and SECURITY.md.
+      options:
+        - label: I will pace requests and keep the 3-strike rate-limit circuit breaker.
+          required: true
+        - label: Any session is a **burner account**, supplied by env var or a gitignored file — never committed, never logged.
+          required: true
+        - label: I have checked the platform's Terms of Service for this access pattern.
+          required: true
+        - label: No real creator handles, captions, metrics or content IDs will be committed (fixtures stay synthetic).
+          required: true

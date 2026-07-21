@@ -1,0 +1,102 @@
+name: Producer agent (Producer SPI)
+description: Propose a new generation agent spun from _producer-template/
+labels: ["enhancement", "producer"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Every producer obeys one contract and differs only in strategy and declared inputs:
+        its own directory + `memory/`, self-registration on startup, reads only hub inputs,
+        writes only hub outputs. Start from `cp -r _producer-template <Dir>`, and read
+        [Producers & SPI](https://VincitoreSi.github.io/TheCuttingRoom/agents-producers/) plus
+        `SimilarContent/` as the worked reference implementation.
+
+        **The golden rule: agents integrate only over the HTTP hub.** No cross-directory file
+        access, ever. **Declare secrets by env-var NAME only — never paste a key here.**
+  - type: input
+    id: name
+    attributes:
+      label: Agent name
+      description: Lowercase, hyphenated — this is its registry key.
+      placeholder: video-to-video
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: "`kind`"
+      options:
+        - clone — faithful 1:1 recreation of a proven winner
+        - proposal — original scripts grounded in winning factors
+        - idea — net-new viral concepts
+        - template — apply a reference video's structure to your own topic
+        - discovery — find and score new creators
+        - other
+    validations:
+      required: true
+  - type: checkboxes
+    id: consumes
+    attributes:
+      label: "`consumes[]` — which hub inputs does it read?"
+      options:
+        - label: "`/api/corpus/{p}/{factors,brief,top,search}`"
+        - label: "`/api/analysis/{p}[/{id}]` — schema-2 blueprints"
+        - label: "`/api/audio/{p}/trending` — sound intelligence"
+        - label: "`/api/insights` — cross-agent learnings"
+        - label: "`/api/reference/{p}` — an operator-supplied reference clip"
+  - type: dropdown
+    id: gate
+    attributes:
+      label: "`human_gate`"
+      description: Does output block on a human approving it in the Dashboard?
+      options:
+        - "true — output lands as `proposed` and waits"
+        - "false — reviewable, but does not block"
+    validations:
+      required: true
+  - type: textarea
+    id: produces
+    attributes:
+      label: "`produces` / `output_status` — what does it write, and where?"
+      description: |
+        Producers write only to `POST /api/studio/{p}` (+ `/api/renders/{p}` for media) and
+        `POST /api/insights`. Every output carries the copy-ready `## Audio` block.
+    validations:
+      required: true
+  - type: textarea
+    id: secrets
+    attributes:
+      label: Required secrets — BY ENV-VAR NAME ONLY
+      description: The hub stores secret *status*, never a value. Names go in `.env.example`.
+      placeholder: |
+        GEMINI_API_KEY  (required)  — Veo / Nano Banana
+        OPENAI_API_KEY  (optional)  — Sora
+    validations:
+      required: true
+  - type: textarea
+    id: strategy
+    attributes:
+      label: Strategy — what makes this agent different?
+      description: Its lane among the producers, and why an existing one doesn't cover it.
+    validations:
+      required: true
+  - type: input
+    id: cost
+    attributes:
+      label: Cost per run
+      description: Rendering spends real money and cannot be cancelled mid-job. Estimate it.
+      placeholder: "~$0.04/frame (Nano Banana); a 6-shot reel ≈ $0.24"
+  - type: checkboxes
+    id: spi
+    attributes:
+      label: Producer SPI compliance
+      options:
+        - label: Integrates **only** over `/api/*` — no file access to the hub or a sibling agent.
+          required: true
+        - label: Self-registers its manifest via `POST /api/producers/register` on startup.
+          required: true
+        - label: Secrets referenced by env-var name only; real keys stay in a gitignored `.env`.
+          required: true
+        - label: Never writes into `ReelScraper/media/<platform>/` — that is the scraped-corpus namespace.
+          required: true
+        - label: Posts one transferable learning to `POST /api/insights` per run.
