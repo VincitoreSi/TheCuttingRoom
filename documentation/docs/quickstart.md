@@ -209,11 +209,13 @@ The hub supports two mechanisms for unattended pipeline execution, both off by d
   runs `scrape → analyze → media` (free stages only). `analysis-engine` requires an explicit
   `include_blueprints` opt-in per platform. Best-effort while the hub is running.
 - **Cascading heartbeat** (`PUT /api/cascade/{platform}`) — a 60s daemon tick that counts
-  new input since the last watermark and fires the next due stage. Steps default to 40:
-  every 40 scraped reels triggers analyze, every 40 scored rows triggers media, every 40
-  downloaded clips triggers blueprint (opt-in), every 40 blueprints triggers propose.
-  Stages fire serially — never in parallel. `render` can never fire through the cascade
-  (spends image-API credits).
+  new input since the last watermark and fires the next due stage. You size it as a funnel:
+  one batch (`scrape_count`, 250 reels by default) and then how much of each boundary's
+  input is expected to survive to the next — 100% analyzed, 60% worth downloading, 20% of
+  those worth a paid blueprint, 20% of those worth proposing against. Because no percentage
+  can exceed 100, a later stage can never be configured to fire more often than the one
+  feeding it. Stages fire serially — never in parallel. `render` can never fire through the
+  cascade (spends image-API credits).
 
 Enable either from the Dashboard's **Board → Schedule** panel, or via the API. Both are
 per-platform and persist across hub restarts.
