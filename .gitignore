@@ -155,6 +155,15 @@ ReelScraper/config/agents/
 # unpacks it into demo-data/data/ at runtime. Only the folder README and an empty-dir
 # marker are kept, so a fresh clone has the directory but none of the data. Publishing the
 # real dataset would expose third-party content without consent — see demo-data/README.md.
+#
+# Ignore ALL of demo-data/ and re-admit only the two tracked files. The earlier form
+# (`/demo-data/data/*`) covered the payload but not `demo-data/manifest.json`, which the zip
+# unpacks alongside `data/` — so after a real `./demo` that one file was still stageable.
+# Denying the directory and negating the exceptions cannot miss a new sibling the capture
+# script starts emitting.
 demodataset.zip
+/demo-data/*
+!/demo-data/README.md
+!/demo-data/data/
 /demo-data/data/*
 !/demo-data/data/.gitkeep

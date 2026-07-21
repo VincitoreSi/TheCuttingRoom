@@ -196,6 +196,7 @@ if [ "$IS_GIT" -eq 1 ]; then
            "ReelScraper/renders/instagram/abc123/reel.mp4" \
            "ReelScraper/renders/index.json" \
            "ReelScraper/studio/instagram/x.md" \
+           "demo-data/manifest.json" \
            "demodataset.zip"; do
     checked=$((checked+1))
     ( cd "$ROOT" && git check-ignore -q "$p" ) || { bad=$((bad+1)); missed="$missed $p"; }

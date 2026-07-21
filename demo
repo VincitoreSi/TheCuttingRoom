@@ -98,7 +98,10 @@ if [ "$KEEP" -eq 1 ]; then
 else
   # cp -R rather than rsync: rsync is not guaranteed present, and demo-data/data mirrors
   # the repo layout exactly, so a plain recursive merge-over is all that is needed.
-  ( cd "$DEMO_DATA" && find . -mindepth 1 -maxdepth 1 -exec cp -R {} "$ROOT/" \; )
+  # `.gitkeep` is excluded: it exists only to keep the empty demo-data/data/ directory in
+  # git, and copying it lands a stray, non-ignored `.gitkeep` in the repo root.
+  ( cd "$DEMO_DATA" && find . -mindepth 1 -maxdepth 1 ! -name '.gitkeep' \
+      -exec cp -R {} "$ROOT/" \; )
   if [ -f "$ROOT/demo-data/manifest.json" ]; then
     python3 - "$ROOT/demo-data/manifest.json" <<'PY'
 import json, sys
