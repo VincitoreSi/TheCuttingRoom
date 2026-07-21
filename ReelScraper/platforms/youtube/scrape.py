@@ -381,6 +381,11 @@ def collect_shorts(entry: str, resolved: dict, limit: int, want_engagement: bool
 
 def read_pages(path: Path):
     out = []
+    # A fresh install has no pages.txt yet (only pages.txt.example ships). Treat a missing
+    # file as "no channels" so main() reaches its clear guidance instead of dying on an
+    # uncaught FileNotFoundError traceback. Matches instagram/scrape.py.
+    if not path.exists():
+        return out
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line and not line.startswith("#") and line not in out:

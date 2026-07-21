@@ -354,6 +354,12 @@ def norm_handle(s: str):
 
 def read_pages(path: Path):
     handles = []
+    # A fresh install has no pages.txt yet (only pages.txt.example ships). Treat a missing
+    # file as "no handles" so main() reaches its clear "no handles given" guidance instead
+    # of dying on an uncaught FileNotFoundError traceback. instagram/scrape.py has guarded
+    # this for a while; x and youtube were left behind.
+    if not path.exists():
+        return handles
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):

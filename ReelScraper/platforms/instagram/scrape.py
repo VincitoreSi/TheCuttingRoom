@@ -294,6 +294,25 @@ def read_input_file(path):
                 handles.append(h)
     return handles
 
+def rows_and_summary(raw_all, meta_all):
+    """Flat xlsx rows + the per-creator tally, rebuilt from the FULL raw set.
+
+    `save_outputs` rewrites both files wholesale, so what it is handed has to describe
+    everything on disk — not just the creators this run happened to touch. Deriving them
+    here rather than accumulating during the loop is what makes a resumed run safe:
+    skipped creators are still in `raw_all`, so they still make it into both outputs.
+    `flatten` is pure, so re-deriving a previously-saved creator's rows is free of
+    side effects and produces exactly what the earlier run wrote.
+    """
+    rows, summary = [], []
+    for c, items in raw_all.items():
+        fol = (meta_all.get(c) or {}).get("followers")
+        for m in items:
+            rows.append(flatten(m, c, fol))
+        summary.append((c, len(items)))
+    return rows, summary
+
+
 def save_outputs(out_xlsx, raw_json, all_rows, raw_all, summary):
     raw_json.write_text(json.dumps(raw_all, ensure_ascii=False, indent=1), encoding="utf-8")
     out = openpyxl.Workbook()
@@ -372,7 +391,23 @@ def main():
         try: meta_all = json.loads(meta_json.read_text(encoding="utf-8"))
         except Exception: meta_all = {}
 
-    all_rows, raw_all, summary = [], {}, []
+    # Seed from what is already on disk, exactly as meta_all above — and for the same
+    # reason, which was missed here. `save_outputs` writes this dict WHOLESALE, so every
+    # creator absent from it is deleted from the file. `todo` deliberately excludes
+    # creators already saved, so starting empty meant a resumed run rewrote the corpus
+    # down to just this run's additions; and when nothing was left to do it wrote `{}`
+    # over everything and still logged DONE with rc 0. Adding one handle to a watchlist
+    # of five destroyed the other four; running the pipeline twice destroyed the lot and
+    # left analyze reporting "no scraped data — scrape first".
+    raw_all = {}
+    if raw_json.exists():
+        try:
+            raw_all = json.loads(raw_json.read_text(encoding="utf-8")) or {}
+        except Exception:
+            raw_all = {}
+    if not isinstance(raw_all, dict):
+        raw_all = {}
+    kept = len(raw_all)
     stopped = False
     for n, c in enumerate(todo, 1):
         log.info("creator start", extra={"i": n, "of": len(todo), "creator": c})
@@ -385,20 +420,24 @@ def main():
         if prof:
             meta_all[c] = prof
         raw_all[c] = items
-        fol = (prof or {}).get("followers")
-        for m in items:
-            all_rows.append(flatten(m, c, fol))
-        summary.append((c, len(items)))
+        all_rows, summary = rows_and_summary(raw_all, meta_all)
         save_outputs(out_xlsx, raw_json, all_rows, raw_all, summary)
         meta_json.write_text(json.dumps(meta_all, ensure_ascii=False, indent=1), encoding="utf-8")
         time.sleep(random.uniform(*CREATOR_DELAY))
 
+    all_rows, summary = rows_and_summary(raw_all, meta_all)
     save_outputs(out_xlsx, raw_json, all_rows, raw_all, summary)
     meta_json.write_text(json.dumps(meta_all, ensure_ascii=False, indent=1), encoding="utf-8")
     status = "STOPPED EARLY (rate limit)" if stopped else "DONE"
-    log.info("%s — %d reels across %d creators -> %s", status, len(all_rows), len(summary), out_xlsx.name,
+    # Report the corpus TOTAL and what this run added separately. The old line reported
+    # only this run's additions, so a resumed run that legitimately had nothing to do
+    # said "0 reels across 0 creators" — indistinguishable from a scrape that failed to
+    # pull anything, and the phrasing the hub then showed on the board.
+    added = len(raw_all) - kept
+    log.info("%s — %d reels across %d creators (+%d new) -> %s",
+             status, len(all_rows), len(summary), added, out_xlsx.name,
              extra={"status": status, "reels": len(all_rows), "creators": len(summary),
-                    "per_creator": dict(summary)})
+                    "new_creators": added, "per_creator": dict(summary)})
     if args.workers > 1:
         log.info("run `python merge.py` after all workers finish to combine into one xlsx")
 
