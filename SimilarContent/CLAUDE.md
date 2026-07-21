@@ -99,15 +99,62 @@ defaults to the `top_n` knob and `prefer_blueprint` is honoured from hub config.
 already approved does not silently un-approve it (`ReelScraper/api/app.py::save_proposal`).
 
 **"Easy to make"** = the simplest production: few shots / short / static / minimal editing. The
-whole rule is one tunable function, `engine/propose.py::score_ease()`. Candidates that clear
-`EASE_THRESHOLD` rank easy-first, virality-second; if too few clear it the run backfills from
-the highest-virality remainder rather than returning a short list.
+whole rule is one tunable function, `engine/propose.py::score_ease()`, and **every term is
+continuous**: `45/(1+(n-1))` for shots, `30·clamp((30-d)/25)` for duration, `20·(static/n)` for
+camera. One extra shot, one extra second and one moving shot each cost something, so two
+different clips can never land on the same number. (They used to: the terms were bands, the
+shot band stopped at 4, and on a real corpus of 6-7 shot ~10s static reels *every* candidate
+scored exactly 40 against a gate of 55. Nothing ever cleared it and the run silently served
+"most viral" to an operator who asked for "easiest to remake".) Candidates that clear
+`ease_threshold` rank easy-first, virality-second; if too few clear it the run backfills from
+the remainder (`backfill_order`) rather than returning a short list.
+
+Three things that shape is easy to get wrong, all of them load-bearing:
+- **The duration it scores is the MEASURED one** (`clip_duration`): the corpus row's
+  `duration_s` is the platform's own `video_duration`, while the blueprint's
+  `estimated_duration_seconds` is a vision model's guess at the same number and is 0.6s out
+  for one of six real clips — five times the gaps that separate the rest of the pool. The
+  score, the CLI table and the recipe's `**duration:**` all read that one function, so they
+  can never print three numbers for one clip.
+- **Duration is also a veto.** Shots + static total 65, above any sane gate, so a clip whose
+  duration is unknown or >= 30s can never be "easy" whatever it scores — otherwise a 90s
+  single-take outranks every genuine candidate and *missing* data is rewarded.
+- **The static term divides by the shots that carry camera data**, and `camera_movement` is
+  matched as a token set, not by substring: "Drone shot" contains "one shot".
+
+**The gate reports on itself.** Every `propose` run says what the gate did, in the terminal and
+as a structured `POST /api/logs` event:
+- starved — `0 of 15 candidates cleared ease >= 55 — best score was 52.18. Lower ease_threshold
+  to 52 to rank by ease` (`ease.starved`, level `warning`). It never lowers anything itself.
+- restore-ready — `12 of 15 candidates now clear ease >= 55 — restore ease_threshold to 55`
+  (`ease.restore_ready`). With `ease_auto_restore` on it raises the threshold and says so
+  (`ease.restored`).
+
+**Automation may only ever RAISE the threshold** (`engine/propose.py::automation_threshold`,
+which is a `max()` — a lower value is not representable in its output). Only a human lowers it.
+A wrong restore means fewer easy picks: visible, and recoverable in one edit. A wrong
+auto-lowering would quietly admit clips nobody would call easy and every recipe would still
+look right. Lowering the threshold records where it came from in `ease_restore_to` so a restore
+has a target; only a restore that actually happened clears the record, and a value a human put
+there is never rewritten.
+
+The `max()` alone is not enough, because it is taken against the threshold the run read at
+START and the write lands seconds later, after a corpus fetch and up to `pool` blueprint
+fetches. So the write is a **compare-and-set** (`hub.update_agent_config(..., expect=)`): if
+`ease_threshold` moved in the hub while the run was scoring, the restore is abandoned rather
+than overwriting it — otherwise an operator raising the gate to 70 mid-run would have had it
+silently replaced by the 55 the run computed before they touched it. Three more limits on the
+same write: a run never restores in the same pass that first recorded the target (D5's prompt
+comes first), never on a pool narrowed by `--count/--top/--topic` (D4's margin is about the
+configured pool, not a hand-typed one), and never reports `RESTORED` unless the write landed —
+a `--dry-run`, a 500 or a conflict all report `restore_ready` instead.
 
 Run `propose` when you need proposals; the steps below are what it does and what you extend by
 hand (visuals, self-eval, insights) for a given platform + topic:
 
 0. **Run start.** Fetch config (`GET /api/config/agent/similar-content`) and snapshot the knobs
-   (image_provider, top_n, prefer_blueprint, fidelity_score_threshold, reuse_public_audio_only,
+   (image_provider, top_n, prefer_blueprint, ease_threshold / ease_restore_to /
+   ease_auto_restore / backfill_order, fidelity_score_threshold, reuse_public_audio_only,
    render_steps/seed, …). Mint a `run_id` (e.g. `sc-<ISO8601>`). Open a per-run local log
    `logs/<ISO-start>_run.log` (JSONL + pretty). `POST /api/logs` a `run_start` event with the
    `run_id`. Report secret status (from the register step) — if the active image provider's key is

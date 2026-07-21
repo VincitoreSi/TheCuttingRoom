@@ -134,9 +134,27 @@ def hardest_blueprint(blueprints):
 
 @pytest.fixture
 def middle_blueprint(blueprints, hardest_blueprint):
-    """A second clip that is no harder than `hardest_blueprint` and distinct from it, so the
-    three-way ordering assertion has a real middle term."""
+    """A middle term that actually scores EASIER than `hardest_blueprint`.
+
+    Selecting on shot count is not enough on its own: a shape contrast is not a SCORE
+    contrast, and an ordering assertion over two equal numbers proves nothing. This used to
+    skip on every realistic corpus, because `score_ease` awarded nothing for shots once a
+    clip passed four — a 6-shot and a 7-shot reel of the same length landed on the identical
+    number, which was the bug rather than a property of the data. The terms are continuous
+    now and each extra shot costs something, so this should find a middle term on any corpus
+    with two distinct shapes in it.
+
+    Still guarded, and the guard is still worth keeping: a corpus of six identical clips
+    genuinely cannot demonstrate ordering. A skip here says exactly that — and `./health`
+    reports skipped tests rather than swallowing them."""
+    from engine.propose import score_ease
+
+    hard = score_ease({}, hardest_blueprint).score
     for bp in blueprints[1:]:
-        if bp["content_id"] != hardest_blueprint["content_id"]:
+        if bp["content_id"] == hardest_blueprint["content_id"]:
+            continue
+        if score_ease({}, bp).score > hard:
             return bp
-    pytest.skip(f"need >= 3 distinct blueprints: {ANALYSIS}")
+    pytest.skip(
+        f"no blueprint scores easier than the hardest one — this corpus does not separate "
+        f"by ease, so the ordering proves nothing: {ANALYSIS}")

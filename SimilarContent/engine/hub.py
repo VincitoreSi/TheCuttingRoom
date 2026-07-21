@@ -19,6 +19,7 @@ Endpoints used:
   POST /api/renders/{p}                            upload the rendered reel (§ render store)
   POST /api/producers/register                     self-registration
   GET  /api/config/agent/{agent}                   tunable knobs (§10.3)
+  PUT  /api/config/agent/{agent}                   ease threshold restore ONLY (D3)
   POST /api/logs | /api/evals | /api/insights      lifecycle, self-eval, learnings
 """
 from __future__ import annotations
@@ -38,8 +39,30 @@ log = logging.getLogger("sc.hub")
 DEFAULT_TIMEOUT = 60
 
 
+def _same_value(a, b) -> bool:
+    """Is this stored knob still the value the run read? `55` and `"55"` and `55.0` are, since
+    hub config is JSON written by a Dashboard number input; `True` and `1` are not, because a
+    boolean in an integer knob is a corrupt value and must not silently satisfy a guard."""
+    if isinstance(a, bool) != isinstance(b, bool):
+        return False
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return a == b
+
+
 class HubError(RuntimeError):
     """A non-2xx response (or transport failure) from the hub."""
+
+
+class ConfigConflict(HubError):
+    """The stored config changed between the run reading it and the run writing it.
+
+    Separate from a plain HubError because the caller must react differently: a transport
+    failure means "the write did not land, try again"; this means "somebody else's value is
+    in force and it is NOT the one this decision was computed from" — the write must be
+    abandoned, not retried.
+    """
 
 
 class HubClient:
@@ -152,6 +175,46 @@ class HubClient:
         merged = dict(got.get("defaults") or {})
         merged.update(got.get("config") or {})
         return merged
+
+    # ---- config writes --------------------------------------------------------------
+    def update_agent_config(self, agent: str, updates: dict,
+                            expect: dict | None = None) -> dict:
+        """Change specific knobs, leaving everything else exactly as it is.
+
+        PUT /api/config/agent/{agent} REPLACES the whole stored document, so this is a
+        read-modify-write. What gets stored stays a DIFF against the manifest defaults: a key
+        whose value equals its default is dropped, so raising a default later still reaches
+        an agent that never deliberately overrode it, and the Agent Desk keeps showing
+        "default" rather than a frozen copy of one.
+
+        Only ever called for the ease threshold lifecycle, and only through
+        engine/propose.py::automation_threshold — see the safety asymmetry there.
+
+        `expect` makes the write a COMPARE-AND-SET, and the safety asymmetry depends on it.
+        `automation_threshold` is a `max()` against the value the RUN READ AT START, and a
+        propose run spends seconds fetching a corpus, an analysis listing and up to `pool`
+        blueprints between that read and this write. If an operator raises ease_threshold to
+        70 in the Agent Desk during that window, `max(40, 55)` still says 55 and this method
+        would happily store it — automation lowering a gate a human just raised, which is the
+        one thing that must be impossible. Comparing against the document fetched INSIDE the
+        write, and refusing when it has moved, is what makes "cannot lower" true of the
+        system rather than only of the function.
+        """
+        got = self._request("GET", f"/api/config/agent/{agent}") or {}
+        defaults = got.get("defaults") or {}
+        stored = dict(got.get("config") or {})
+        if expect:
+            live = {**defaults, **stored}
+            for key, want in expect.items():
+                if not _same_value(live.get(key), want):
+                    raise ConfigConflict(
+                        f"{agent}.{key} is {live.get(key)!r} in the hub, not {want!r} — it "
+                        f"changed during this run, so this write is abandoned rather than "
+                        f"overwriting it")
+        stored.update(updates)
+        stored = {k: v for k, v in stored.items()
+                  if k not in defaults or defaults[k] != v}
+        return self._request("PUT", f"/api/config/agent/{agent}", body={"config": stored})
 
     # ---- writes ---------------------------------------------------------------------
     def register_producer(self, manifest: dict) -> dict:
