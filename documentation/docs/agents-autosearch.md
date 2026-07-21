@@ -54,7 +54,7 @@ sequenceDiagram
     end
 
     loop per expanded term
-        AS->>IG: topsearch() (burner-only; guest-only skips with a banner)
+        AS->>IG: topsearch() (burner-only — guest-only skips with a banner)
         IG-->>AS: candidate usernames
         loop per new username
             AS->>IG: web_profile_info() (hydrate)
