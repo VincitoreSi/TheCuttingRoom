@@ -35,6 +35,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+container_mode_guard clean
+
 printf '\n  %sThe Cutting Room%s · clean\n' "$_B" "$_R"
 
 # ---------------------------------------------------------------- 0. can git answer?

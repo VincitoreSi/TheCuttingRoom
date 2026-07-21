@@ -30,6 +30,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+container_mode_guard docsite "./cr docsite"
+
 printf '\n  %sThe Cutting Room%s · documentation\n' "$_B" "$_R"
 
 [ -f "$CFG" ] || die "no mkdocs config at ${CFG#"$ROOT"/}"

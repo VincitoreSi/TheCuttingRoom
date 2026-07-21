@@ -37,6 +37,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+container_mode_guard demo "./cr demo"
+
 printf '\n  %sThe Cutting Room%s · demo\n' "$_B" "$_R"
 
 # -------------------------------------------------------------- resolve the dataset

@@ -422,6 +422,50 @@ read_key() {
   printf '%s' "$val"
 }
 
+# container_mode_guard <script> [<./cr equivalent>] — stop a host-lane run of a containerized
+# checkout, and say what to run instead.
+#
+# The two keys are written by different parties and mean different things, which is why the
+# condition needs both. `./cr up` pins TCR_MODE=container into ReelScraper/.env — that file is
+# on the bind mount, so it is EQUALLY visible from inside the container and cannot on its own
+# distinguish the lanes. TCR_CONTAINER=1 is set by the image and by every compose service, and
+# is true only inside. So "container mode AND not in the container" is exactly "the human is on
+# the host, but this checkout's hub lives in a container".
+#
+# Getting this wrong is not cosmetic. ./stop identifies the hub by its working directory, which
+# is meaningless across a container boundary: on the host it finds nothing, reports success, and
+# leaves the container running. ./init would claim a second port and start a second hub against
+# the same bind-mounted data. ./clean would delete data the container is mid-write on.
+#
+# TCR_FORCE_HOST=1 is the escape hatch, and it exists because this guard is a heuristic over a
+# key a previous command wrote: a checkout can be legitimately switched back to the host lane,
+# and a stale TCR_MODE must never be able to lock someone out of their own scripts.
+container_mode_guard() {
+  local script="$1" alt="${2:-}"
+  [ -z "${TCR_CONTAINER:-}" ]  || return 0      # inside the container: this IS the right lane
+  [ -z "${TCR_FORCE_HOST:-}" ] || return 0      # explicit opt-out
+  [ "$(read_key TCR_MODE "$ROOT/ReelScraper/.env")" = "container" ] || return 0
+
+  if [ -n "$alt" ]; then
+    die "this checkout is in container mode (TCR_MODE=container in ReelScraper/.env), and
+./$script is the host-lane script. It cannot see, control or safely share state with a hub
+running in a container.
+
+    run instead:  $alt
+
+If you have gone back to running on the host, clear TCR_MODE from ReelScraper/.env, or set
+TCR_FORCE_HOST=1 for this one command."
+  fi
+  die "this checkout is in container mode (TCR_MODE=container in ReelScraper/.env), and
+./$script has no ./cr equivalent yet.
+
+    run it inside:  ./cr shell   then  ./$script
+
+Running it from the host would act on files a container is using. If you have gone back to
+running on the host, clear TCR_MODE from ReelScraper/.env, or set TCR_FORCE_HOST=1 for this
+one command."
+}
+
 # prompt_secret <VAR> <prompt> — read without echoing; empty is allowed (skip)
 #
 # The prompt MUST go to stderr, not stdout. This function is called as `X="$(prompt_secret

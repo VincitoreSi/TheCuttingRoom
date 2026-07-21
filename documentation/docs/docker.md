@@ -447,14 +447,30 @@ would start a second hub inside a throwaway container, on a port nothing publish
 dataset lands on the bind mount either way, so reload the browser tab against the hub `./cr up`
 is already running.
 
-**The six entry points do not yet have a container-mode guard.** `./cr up` pins
-`TCR_MODE=container` into `ReelScraper/.env` and the image sets `TCR_CONTAINER=1`; the guard
-that reads them (`TCR_MODE=container` **and** `TCR_CONTAINER` unset → redirect to `./cr`) is not
-in `init`, `demo`, `stop`, `clean`, `health` or `docsite` today. Writing the keys is harmless
-and is the contract for whoever adds it — but for now, running the host-lane scripts against a
-containerized hub will not stop you, and they will guess wrong about it. In particular `./stop`
-identifies processes by working directory, which is meaningless across a container boundary;
-use `./cr down`.
+**The host-lane scripts refuse to run once you are in container mode.** `./cr up` pins
+`TCR_MODE=container` into `ReelScraper/.env`; the image and every compose service set
+`TCR_CONTAINER=1`. "Container mode **and** not in the container" means you are on the host
+while this checkout's hub lives in a container, and all six entry points stop with the `./cr`
+equivalent instead of guessing:
+
+| On the host | Run instead |
+|---|---|
+| `./init` | `./cr up` |
+| `./demo` | `./cr demo` |
+| `./stop` | `./cr down` |
+| `./health` | `./cr health` |
+| `./docsite` | `./cr docsite` |
+| `./clean` | no `./cr` verb — `./cr shell`, then `./clean` inside |
+
+This is not tidiness. `./stop` identifies the hub by its working directory, which is
+meaningless across a container boundary: on the host it finds nothing, reports success, and
+leaves the container running. `./init` would start a second hub against the same
+bind-mounted data, and `./clean` would delete files the container is mid-write on.
+
+`--help` still works on every one of them. If you have genuinely moved back to the host lane,
+clear `TCR_MODE` from `ReelScraper/.env` — `./cr down` deliberately leaves it, since a stopped
+container-mode checkout is still a container-mode checkout. `TCR_FORCE_HOST=1` overrides the
+guard for a single command.
 
 **A green `./health` is not by itself evidence about the boundary.** Its "hub binds loopback
 only" invariant is a grep for a literal `0.0.0.0` in the hub source, and in container mode

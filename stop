@@ -25,6 +25,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+container_mode_guard stop "./cr down"
+
 printf '\n  %sThe Cutting Room%s · stop\n' "$_B" "$_R"
 
 step "Processes owned by this checkout"

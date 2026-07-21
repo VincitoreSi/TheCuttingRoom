@@ -292,3 +292,89 @@ def test_every_working_data_path_is_actually_gitignored():
                           capture_output=True).returncode != 0:
             committable.append(probe)
     assert not committable, f"working data that git would happily commit: {committable}"
+
+
+# ------------------------------------------------------------- container-mode guard
+# `./cr up` pins TCR_MODE=container into ReelScraper/.env, which lives on the bind mount and
+# is therefore equally visible from inside the container. Only TCR_CONTAINER=1 (set by the
+# image and by every compose service) distinguishes the lanes, so the guard needs both keys.
+#
+# These tests matter because the guard BLOCKS. A false positive locks a maintainer out of
+# their own scripts; a false negative lets ./stop report success while the container it could
+# never see keeps running.
+ENTRY_POINTS = {
+    "init": "./cr up",
+    "demo": "./cr demo",
+    "stop": "./cr down",
+    "clean": None,          # no ./cr verb — the guard points at ./cr shell instead
+    "health": "./cr health",
+    "docsite": "./cr docsite",
+}
+
+
+def _guard(tmp_path, name, env=None, mode="container"):
+    """Invoke container_mode_guard exactly as an entry point does, against a fake .env."""
+    root = tmp_path / f"guard-{name}"
+    (root / "scripts").mkdir(parents=True)
+    (root / "ReelScraper").mkdir()
+    shutil.copy2(COMMON, root / "scripts" / "_common.sh")
+    if mode is not None:
+        (root / "ReelScraper" / ".env").write_text(f"HUB_PORT=8787\nTCR_MODE={mode}\n")
+    alt = ENTRY_POINTS[name]
+    call = f'container_mode_guard {name} "{alt}"' if alt else f"container_mode_guard {name}"
+    return _bash(f'ROOT="{root}"; . "{root}/scripts/_common.sh"; {call}; echo RAN', root, env)
+
+
+@pytest.mark.parametrize("name", sorted(ENTRY_POINTS))
+def test_guard_blocks_every_host_lane_script_in_container_mode(tmp_path, name):
+    r = _guard(tmp_path, name)
+    assert r.returncode != 0, f"./{name} ran on the host against a containerized checkout"
+    assert "RAN" not in r.stdout
+    assert "container mode" in r.stderr
+    alt = ENTRY_POINTS[name]
+    # The error must name the way forward, or it is just an obstacle.
+    assert (alt or "./cr shell") in r.stderr
+
+
+@pytest.mark.parametrize("name", sorted(ENTRY_POINTS))
+def test_guard_is_silent_inside_the_container(tmp_path, name):
+    """TCR_CONTAINER=1 means we ARE the container: this is the correct lane, not a mistake."""
+    r = _guard(tmp_path, name, env={"TCR_CONTAINER": "1"})
+    assert r.returncode == 0 and "RAN" in r.stdout, r.stderr
+
+
+@pytest.mark.parametrize("name", sorted(ENTRY_POINTS))
+def test_guard_is_silent_on_a_plain_host_checkout(tmp_path, name):
+    """No TCR_MODE at all — the overwhelmingly common case, including CI. Must not trip."""
+    r = _guard(tmp_path, name, mode=None)
+    assert r.returncode == 0 and "RAN" in r.stdout, r.stderr
+
+
+def test_guard_honours_the_force_host_escape_hatch(tmp_path):
+    """A stale TCR_MODE must never be able to lock someone out of their own scripts."""
+    r = _guard(tmp_path, "stop", env={"TCR_FORCE_HOST": "1"})
+    assert r.returncode == 0 and "RAN" in r.stdout, r.stderr
+
+
+def test_guard_ignores_a_non_container_tcr_mode(tmp_path):
+    r = _guard(tmp_path, "stop", mode="host")
+    assert r.returncode == 0 and "RAN" in r.stdout, r.stderr
+
+
+def test_every_entry_point_actually_calls_the_guard():
+    """The guard is worthless in a script that forgot to call it.
+
+    Also asserts it is called AFTER the argument loop: `--help` must keep working on a
+    containerized checkout, since that is exactly when someone is trying to work out what
+    to run instead.
+    """
+    for name, alt in ENTRY_POINTS.items():
+        text = (REPO / name).read_text()
+        assert "container_mode_guard" in text, f"./{name} never calls container_mode_guard"
+        if alt:
+            assert f'container_mode_guard {name} "{alt}"' in text, \
+                f"./{name} calls the guard with the wrong ./cr equivalent"
+        guard_at = text.index("container_mode_guard")
+        loop_end = text.index("\ndone\n")
+        assert guard_at > loop_end, \
+            f"./{name} calls the guard before parsing args — --help would be blocked"

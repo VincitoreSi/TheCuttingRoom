@@ -270,14 +270,12 @@ First non-comment line found: '$first'"
     # make ./stop misreport the moment you brought the hub back. Clearing it is a deliberate
     # act — remove the line from ReelScraper/.env.
     #
-    # (The guard does not exist in the entry points yet — `grep -rn TCR_MODE init demo stop
-    # clean health docsite scripts/` returns nothing. Writing the key is harmless until it
-    # lands, and it is the contract for whoever adds it.)
+    # The guard is container_mode_guard in scripts/_common.sh, called by all six entry points
+    # after their argument loops (so --help keeps working). TCR_FORCE_HOST=1 overrides it.
     if [ -z "$(readkey TCR_MODE)" ]; then
       setkey TCR_MODE container
-      say "pinned TCR_MODE=container in ReelScraper/.env — once the entry-point guard lands,"
-      say "the six bash scripts will redirect you to ./cr instead of guessing about a"
-      say "containerized hub."
+      say "pinned TCR_MODE=container in ReelScraper/.env — the six bash scripts will now"
+      say "redirect you to ./cr instead of guessing about a containerized hub."
     fi
 
     dc up -d hub || die "docker compose up failed.
