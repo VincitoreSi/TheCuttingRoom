@@ -232,8 +232,25 @@ if [ "$LIVE" -eq 1 ]; then
   step "Live smoke test"
   URL="http://127.0.0.1:8787"
   STARTED=0
+  # Reuse a running hub only after confirming it belongs to THIS checkout. A second clone or
+  # a worktree with its own hub on 8787 would otherwise be tested in place of this one, and
+  # its results attributed here — that happened, and reported two failures for a tree whose
+  # Dashboard had simply never been built. hub_cwd returns the listening process's working
+  # directory, which start_hub always sets to <repo>/ReelScraper.
+  REUSE=0; REUSE_WHY=""
   if hub_responding "$URL"; then
-    record "hub reachable" pass "reusing the one already running"
+    owner_cwd="$(hub_cwd 8787 || true)"
+    if [ -z "$owner_cwd" ]; then
+      # Could not inspect the process — assume it is ours rather than starting a duplicate.
+      REUSE=1; REUSE_WHY="reusing the one already running (checkout unverified)"
+    elif [ "$owner_cwd" = "$ROOT/ReelScraper" ]; then
+      REUSE=1; REUSE_WHY="reusing the one already running"
+    else
+      say "${_D}(:8787 belongs to a different checkout — ${owner_cwd%/ReelScraper}; starting our own)${_R}"
+    fi
+  fi
+  if [ "$REUSE" -eq 1 ]; then
+    record "hub reachable" pass "$REUSE_WHY"
   else
     PORT="$(free_port 8787)"
     if start_hub "$PORT" 2>/dev/null; then

@@ -3,6 +3,9 @@
 This is a direction sketch, not a promise. Priorities shift with contributions
 and real-world use. Have an idea? Open a discussion or an issue.
 
+Tracked on the [Roadmap board](https://github.com/users/VincitoreSi/projects/7), which
+mirrors the sections below: *Next* → Next, *Later* → Backlog.
+
 ## Now (foundation)
 
 - ✅ Clean open-source release: curated history, MIT license, contributor docs.
@@ -40,8 +43,10 @@ and real-world use. Have an idea? Open a discussion or an issue.
 ## Non-goals
 
 - Bundling real scraped data or targeting lists in a **public** release. Examples stay
-  synthetic. (`demo-data/` is a deliberate, documented exception while the repo is private
-  — see [`demo-data/README.md`](demo-data/README.md); it must be replaced or purged from
-  history before publishing.)
+  synthetic, `demo-data/data/` ships empty, and **no release attaches `demodataset.zip`** —
+  release assets on a public repo are downloadable by anyone, which is the whole point of
+  the policy. The dataset is shared privately on request; see
+  [`demo-data/README.md`](demo-data/README.md). A fully synthetic corpus that *could* be
+  published is the "Later" item above.
 - Storing secret values in the hub. Secrets are referenced by env-var name only.
 - Breaking the HTTP-hub boundary between agents for convenience.

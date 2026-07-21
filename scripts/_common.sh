@@ -80,6 +80,29 @@ PY
 # hub_responding <url> — true if a hub is already serving there
 hub_responding() { curl -sf -o /dev/null --max-time 2 "$1/api/platforms" 2>/dev/null; }
 
+# hub_cwd <port> — echo the working directory of the process LISTENING on that port.
+#
+# "A hub is answering on 8787" does not mean it is THIS checkout's hub. Anyone with a second
+# clone (or a worktree) can have one running, and reusing it silently tests the wrong tree —
+# `./health --live` once reported two failures that belonged to an unrelated checkout whose
+# Dashboard had never been built. The hub is always launched with cwd = <repo>/ReelScraper
+# (start_hub below, and `uv run cli.py start` by hand), so the cwd identifies the checkout.
+#
+# Prints nothing and returns 1 when it cannot be determined — no lsof, no /proc, or the
+# process belongs to another user. Callers must treat "unknown" as "cannot verify", never as
+# "foreign", or a hardened box would stop reusing its own hub.
+hub_cwd() {
+  local port="$1" pid cwd
+  pid="$(lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null | head -1)"
+  [ -n "$pid" ] || return 1
+  # -Fn prints one field per line prefixed by its type; the cwd row starts with `n`.
+  # Works on macOS and Linux lsof alike. /proc is the fallback when lsof is absent.
+  cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+  [ -n "$cwd" ] || cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null)"
+  [ -n "$cwd" ] || return 1
+  printf '%s\n' "$cwd"
+}
+
 # wait_for_hub <url> [seconds] — poll until it answers
 wait_for_hub() {
   local url="$1" limit="${2:-45}" i=0
