@@ -37,11 +37,13 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKey) => void }) 
   // First-run onboarding, derived from live state. While incomplete it owns the
   // "what do I do first" slot (and steers a new user to add a handle, not run a
   // scrape that must fail); once done it hands that slot back to NextStep.
+  const platformJobs = jobsFor(jobs, platform);
   const ob = deriveOnboarding({
     pagesCount: configQ.data?.pages.length ?? 0,
     summary,
-    jobs: jobsFor(jobs, platform),
+    jobs: platformJobs,
   });
+  const busy = platformJobs.some((j) => j.status === "running" || j.status === "queued");
 
   const tiles = [
     { label: "Reels mined", value: summary?.items ?? 0, accent: true },
@@ -84,10 +86,19 @@ export function Dashboard({ onNavigate }: { onNavigate: (v: ViewKey) => void }) 
                 variant="primary"
                 size="sm"
                 onClick={() => runAll.mutate()}
-                disabled={runAll.isPending}
+                /* `isPending` only covers the POST, which returns the moment the
+                   supervisor thread starts — so this used to re-enable itself a few
+                   milliseconds in and invite a second click over the same files. The
+                   real question is whether a stage is still running. */
+                disabled={runAll.isPending || busy}
+                title={
+                  busy
+                    ? "A stage is still running"
+                    : "Runs scrape → analyze → media → blueprint in order, stopping if one fails"
+                }
               >
                 <IconPlay size={14} />
-                {runAll.isPending ? "Running…" : "Run full pipeline"}
+                {busy ? "Running…" : "Run full pipeline"}
               </Button>
             </div>
           }

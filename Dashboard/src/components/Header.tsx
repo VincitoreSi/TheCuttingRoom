@@ -29,6 +29,7 @@ export function Header({
   onPlatform,
   jobs,
   connected,
+  onNavigate,
 }: {
   view: ViewKey;
   platforms: PlatformSummary[];
@@ -36,6 +37,9 @@ export function Header({
   onPlatform: (p: string) => void;
   jobs: Jobs;
   connected: boolean;
+  /** lets the failure status open the Floor Log — optional so the header still renders
+      in isolation (tests, storybook) without a router. */
+  onNavigate?: (v: ViewKey) => void;
 }) {
   const { theme, toggle } = useTheme();
   const agent = agentState(jobs, platform);
@@ -49,8 +53,25 @@ export function Header({
         <h1 className="font-display text-[19px] leading-none tracking-tight">{heading.title}</h1>
       </div>
 
+      {/* The floor status. On failure this is the only always-visible surface in the app,
+          so it carries the failing stage's own last line — the stages write good ones
+          ("no scraped data — scrape first") — and clicking it opens the Floor Log with the
+          full output. Before, a failed run said "Snapped · analyze" and nothing else, and
+          the reason was reachable only as a 90-character truncation inside a board node. */}
       <div className="app-header__center">
-        <SeamStatus state={agent.state} label={agent.label} flowOn={visible} />
+        {agent.state === "error" && onNavigate ? (
+          <button
+            type="button"
+            className="app-header__status app-header__status--error"
+            onClick={() => onNavigate("activity")}
+            title={agent.detail ? `${agent.detail} — click for the full log` : "Click for the log"}
+          >
+            <SeamStatus state={agent.state} label={agent.label} flowOn={visible} />
+            {agent.detail && <span className="app-header__status-why">{agent.detail}</span>}
+          </button>
+        ) : (
+          <SeamStatus state={agent.state} label={agent.label} flowOn={visible} />
+        )}
       </div>
 
       <div className="app-header__right">

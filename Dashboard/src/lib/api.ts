@@ -23,6 +23,36 @@ import type {
 // proxies /api + /media to the hub. So a bare relative base works in both.
 const BASE = "";
 
+/** An HTTP failure carrying what the hub actually said.
+
+    The hub answers a refused run with `{"detail": "No creators on the watchlist. Add a
+    handle in Config first."}` — a sentence written to be read by the person who clicked.
+    Flattening that into "409 Conflict — /api/pipeline/…: {\"detail\":\"No creators…\"}"
+    threw away the only useful part, so `detail` is kept separate and shown on its own. */
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  constructor(status: number, statusText: string, path: string, body: string) {
+    const detail = parseDetail(body);
+    super(detail || `${status} ${statusText} — ${path}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+function parseDetail(body: string): string {
+  try {
+    const j = JSON.parse(body);
+    if (typeof j?.detail === "string") return j.detail;
+    // FastAPI validation errors arrive as a list of {loc, msg, type}
+    if (Array.isArray(j?.detail)) return j.detail.map((d: { msg?: string }) => d?.msg).join("; ");
+  } catch {
+    /* not json — fall through to the raw body */
+  }
+  return body.slice(0, 200);
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
     ...init,
@@ -30,9 +60,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(
-      `${res.status} ${res.statusText} — ${path}${body ? `: ${body.slice(0, 160)}` : ""}`,
-    );
+    throw new ApiError(res.status, res.statusText, path, body);
   }
   return res.json() as Promise<T>;
 }

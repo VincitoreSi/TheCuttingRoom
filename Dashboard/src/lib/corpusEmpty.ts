@@ -16,6 +16,8 @@ export interface CorpusEmpty {
   hint: string;
   /** the pipeline stage that would fix this, when one would */
   run?: Stage;
+  /** when no stage can help, the view that can */
+  goto?: "config";
 }
 
 export function deriveCorpusEmpty(args: {
@@ -25,8 +27,10 @@ export function deriveCorpusEmpty(args: {
   filtered: number;
   /** raw scrape output exists on disk (PlatformSummary.scraped) */
   scraped: boolean;
+  /** handles on the watchlist (PlatformSummary.watchlist) */
+  watchlist: number;
 }): CorpusEmpty | null {
-  const { total, filtered, scraped } = args;
+  const { total, filtered, scraped, watchlist } = args;
 
   if (filtered > 0) return null;
 
@@ -46,6 +50,17 @@ export function deriveCorpusEmpty(args: {
         "Reels are on disk but nothing has ranked them. Analyze scores every one on the " +
         "four virality signals and builds the corpus this grid reads — no re-scraping.",
       run: "analyze",
+    };
+  }
+
+  // Offering Scrape with an empty watchlist is offering a button that cannot work — the
+  // hub refuses it, and the onboarding checklist has always said "add a handle" is step
+  // one. Send them there instead.
+  if (watchlist === 0) {
+    return {
+      title: "No creators watched yet",
+      hint: "Add at least one Instagram handle to the watchlist in Config — the scraper needs somewhere to pull from.",
+      goto: "config",
     };
   }
 

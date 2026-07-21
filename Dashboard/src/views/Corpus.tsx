@@ -9,6 +9,7 @@ import { grouped } from "../lib/format";
 import { recordScore } from "../lib/evalModel";
 import { deriveCorpusEmpty } from "../lib/corpusEmpty";
 import type { Factor, Reel } from "../lib/types";
+import type { ViewKey } from "../components/Sidebar";
 import { cx } from "../lib/cx";
 
 type Sort = "score" | "eval" | "plays" | "reach" | "outlier" | "engagement" | "velocity" | "recent";
@@ -25,7 +26,7 @@ const SORTS: { key: Sort; label: string }[] = [
 
 type Analyzed = "all" | "yes" | "no";
 
-export function Corpus() {
+export function Corpus({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
   const { platform } = useShell();
   const contentQ = useContent(platform);
   // `scraped` separates "nobody has scraped this" from "scraped, never analyzed" — two
@@ -104,6 +105,7 @@ export function Corpus() {
     total: reels.length,
     filtered: filtered.length,
     scraped: summary?.scraped ?? false,
+    watchlist: summary?.watchlist ?? 0,
   });
 
   return (
@@ -188,7 +190,7 @@ export function Corpus() {
               title={empty.title}
               hint={empty.hint}
               action={
-                empty.run && (
+                empty.run ? (
                   <Button
                     variant="primary"
                     size="sm"
@@ -198,7 +200,11 @@ export function Corpus() {
                     <IconPlay size={14} />
                     {runStage.isPending ? "Running…" : `Run ${empty.run}`}
                   </Button>
-                )
+                ) : empty.goto && onNavigate ? (
+                  <Button variant="primary" size="sm" onClick={() => onNavigate(empty.goto!)}>
+                    Open Config
+                  </Button>
+                ) : null
               }
             />
           ) : (

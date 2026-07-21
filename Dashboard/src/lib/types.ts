@@ -18,12 +18,28 @@ export type Stage =
   | "render";
 export type JobStatus = "queued" | "running" | "done" | "error";
 
+/** Whether a stage can do anything useful right now, and what would unblock it.
+    `blocked_by` is a stage the user can run to clear the block — the one-click fix. It is
+    null when running something else cannot help (empty watchlist, missing API key), and
+    `reason` then says what the human has to do instead. */
+export interface StageReadiness {
+  ready: boolean;
+  blocked_by: Stage | null;
+  reason: string;
+}
+
 export interface PlatformSummary {
   platform: string;
   /** a SCORED corpus exists — i.e. analyze has run. Not "a scrape has run"; see `scraped`. */
   has_data: boolean;
   /** raw scrape output is on disk. `scraped && !has_data` means analyze has not run yet. */
   scraped: boolean;
+  /** handles in pages.txt. NOT `creators`, which counts the scored corpus and stays 0
+      until analyze has run — two stages after the handle was added. */
+  watchlist: number;
+  /** reels pulled by the last scrape, straight off the raw dump. NOT `items`. */
+  scraped_items: number;
+  readiness: Record<string, StageReadiness>;
   items: number;
   creators: number;
   viral: number;

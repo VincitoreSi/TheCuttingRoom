@@ -2,6 +2,7 @@ import { createContext, useContext, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { Sidebar, type ViewKey } from "./components/Sidebar";
 import { Header } from "./components/Header";
+import { Toasts } from "./components/Toasts";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { usePipelineEvents, usePlatforms } from "./lib/hooks";
 import { useInvalidateOnJobDone, useReducedMotion } from "./lib/hooks";
@@ -63,6 +64,7 @@ export function App() {
             onPlatform={setPlatform}
             jobs={jobs}
             connected={connected}
+            onNavigate={setView}
           />
           <main className="app-scroll" id="main" role="main">
             {/* Enter-only fade, keyed by view. No exit/mode="wait" so the new
@@ -79,7 +81,7 @@ export function App() {
               <ErrorBoundary key={view}>
                 {view === "dashboard" && <Dashboard onNavigate={setView} />}
                 {view === "discover" && <DiscoveryView />}
-                {view === "corpus" && <Corpus />}
+                {view === "corpus" && <Corpus onNavigate={setView} />}
                 {view === "sounds" && <SoundsView />}
                 {view === "proposals" && <StudioView />}
                 {view === "producers" && <ProducersView />}
@@ -92,6 +94,8 @@ export function App() {
             </motion.div>
           </main>
         </div>
+        {/* outside app-main so a toast is never clipped by the scroll container */}
+        <Toasts />
       </div>
     </ShellCtx.Provider>
   );

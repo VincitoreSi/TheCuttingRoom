@@ -10,7 +10,7 @@ import { sectionMotion } from "../lib/motion";
 import { Button } from "./ui";
 import { Seam } from "./Seam";
 import { IconArrowRight, IconPlay, IconTape } from "./icons";
-import type { PlatformSummary, Stage } from "../lib/types";
+import type { PlatformSummary, Stage, StageReadiness } from "../lib/types";
 import type { ViewKey } from "./Sidebar";
 import { cx } from "../lib/cx";
 
@@ -97,11 +97,15 @@ export function PipelineBoard({
   // real nouns get an "s"; the adjective/status words (pending, viral, saved)
   // must not, so those stay hand-written.
   const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? "" : "s"}`;
+  // Every node reports ITS OWN stage. Sources used to show `creators` and Scrape `items`,
+  // both of which are derived from the scored corpus — so a handle added a moment ago read
+  // "0 pages", and 250 freshly scraped reels read "0 reels", until analyze (two stages
+  // later) had run. The board was reporting the end of the pipeline at every mark.
   const counts: Record<string, string> = {
     discover: pendingQ.data ? `${pendingQ.data.length} pending` : "—",
-    sources: summary ? plural(summary.creators, "page") : "—",
-    scrape: summary ? plural(summary.items, "reel") : "—",
-    analyze: summary ? `${summary.viral} viral` : "—",
+    sources: summary ? plural(summary.watchlist, "page") : "—",
+    scrape: summary ? plural(summary.scraped_items, "reel") : "—",
+    analyze: summary ? `${summary.items} scored · ${summary.viral} viral` : "—",
     media: summary ? `${summary.media_ready} saved` : "—",
     blueprint: analysisQ.data ? plural(analyzedCount, "blueprint") : "—",
     studio: studioQ.data ? plural(studioQ.data.length, "proposal") : "—",
@@ -211,27 +215,15 @@ export function PipelineBoard({
                 {/* only the action is bottom-pinned (mt-auto), giving every stage
                     card a shared full-width Run-button baseline. */}
                 {node.stage ? (
-                  <Button
-                    variant={running ? "oxblood" : "outline"}
-                    size="sm"
-                    className="board__run mt-auto"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      run.mutate(node.stage!);
-                    }}
-                    disabled={running || run.isPending}
-                    title={running ? "Running…" : `Run ${node.label}`}
-                  >
-                    {running ? (
-                      <span className="font-mono text-[11px]">
-                        {job ? elapsed(job.started, job.ended, now) : "…"}
-                      </span>
-                    ) : (
-                      <>
-                        <IconPlay size={13} /> Run
-                      </>
-                    )}
-                  </Button>
+                  <StageAction
+                    stage={node.stage}
+                    label={node.label}
+                    running={running}
+                    elapsedText={job ? elapsed(job.started, job.ended, now) : "…"}
+                    pending={run.isPending}
+                    readiness={summary?.readiness?.[node.stage]}
+                    onRun={(s) => run.mutate(s)}
+                  />
                 ) : clickable ? (
                   <span className="board__link-hint eyebrow mt-auto">
                     {node.cta ?? "Open"} <IconArrowRight size={12} />
@@ -269,6 +261,94 @@ export function PipelineBoard({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/* The bottom slot of a stage card: Run, or why you can't yet.
+
+   Every one of these stages already refuses cleanly when its input is missing ("no scraped
+   data — scrape first"). But the only way to read that was to click Run, wait for a
+   subprocess to fail, and squint at a truncated tail. The hub now reports the same
+   preconditions up front, so a doomed Run is disabled and the stage that would fix it is
+   one click away — following `blocked_by` walks back down the pipeline until it terminates
+   at something a human has to do (add a handle, set a key). */
+function StageAction({
+  stage,
+  label,
+  running,
+  elapsedText,
+  pending,
+  readiness,
+  onRun,
+}: {
+  stage: Stage;
+  label: string;
+  running: boolean;
+  elapsedText: string;
+  pending: boolean;
+  readiness?: StageReadiness;
+  onRun: (s: Stage) => void;
+}) {
+  // No readiness yet (first paint, or an older hub) → behave exactly as before rather
+  // than locking every button on a summary that has not loaded.
+  const blocked = !running && readiness != null && !readiness.ready;
+
+  if (!blocked) {
+    return (
+      <Button
+        variant={running ? "oxblood" : "outline"}
+        size="sm"
+        className="board__run mt-auto"
+        onClick={(e) => {
+          e.stopPropagation();
+          onRun(stage);
+        }}
+        disabled={running || pending}
+        title={running ? "Running…" : `Run ${label}`}
+      >
+        {running ? (
+          <span className="font-mono text-[11px]">{elapsedText}</span>
+        ) : (
+          <>
+            <IconPlay size={13} /> Run
+          </>
+        )}
+      </Button>
+    );
+  }
+
+  const fix = readiness!.blocked_by;
+  return (
+    <div className="board__blocked mt-auto">
+      <div className="board__blocked-why" title={readiness!.reason}>
+        {readiness!.reason}
+      </div>
+      {fix ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="board__run"
+          onClick={(e) => {
+            e.stopPropagation();
+            onRun(fix);
+          }}
+          disabled={pending}
+          title={`Run ${fix} — the stage ${label} is waiting on`}
+        >
+          <IconPlay size={13} /> Run {fix}
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          className="board__run"
+          disabled
+          title={readiness!.reason}
+        >
+          <IconPlay size={13} /> Run
+        </Button>
+      )}
     </div>
   );
 }

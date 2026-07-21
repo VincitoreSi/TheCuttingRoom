@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api";
+import { toastForError } from "./toasts";
 import { applyLogEvent } from "./agentBoard";
 import { renderProgress } from "./renderProgress";
 import type { AgentBoard, ConfigResponse, Jobs, LogEvent, Stage } from "./types";
@@ -123,6 +124,9 @@ export function useRunStage(p: string) {
       // status arrives via SSE; nudge platform counts once the job likely finished
       setTimeout(() => qc.invalidateQueries({ queryKey: ["platforms"] }), 2500);
     },
+    // The hub refuses an unrunnable stage with a written reason. Without this the refusal
+    // was discarded and the Run click looked like it had done nothing.
+    onError: (e, stage) => toastForError(`Could not run ${stage}`, e),
   });
 }
 
@@ -136,6 +140,7 @@ export function useRunAll(platform: string) {
     onSuccess: () => {
       setTimeout(() => qc.invalidateQueries({ queryKey: ["platforms"] }), 2500);
     },
+    onError: (e) => toastForError("Could not start the full pipeline", e),
   });
 }
 
@@ -160,7 +165,20 @@ export function useSaveConfig(p: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: Partial<ConfigResponse>) => api.putConfig(p, body),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["config", p] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["config", p] });
+      // A watchlist edit changes /api/platforms too — it carries the watchlist count the
+      // Board's Sources node shows and the readiness map that decides whether Scrape is
+      // runnable at all. Without this the Board sat on a stale summary and adding the
+      // first handle appeared to do nothing anywhere outside the Config view.
+      qc.invalidateQueries({ queryKey: ["platforms"] });
+    },
+    // A failed PUT used to leave the handle sitting in the list as though it had saved,
+    // so the watchlist on screen disagreed with pages.txt until the next refetch.
+    onError: (e) => {
+      toastForError("Could not save the watchlist", e);
+      qc.invalidateQueries({ queryKey: ["config", p] });
+    },
   });
 }
 
@@ -171,6 +189,7 @@ export function useSetStudioStatus(p: string) {
     mutationFn: (v: { file: string; status: string; note?: string }) =>
       api.setStudioStatus(p, v.file, v.status, v.note),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["studio", p] }),
+    onError: (e, v) => toastForError(`Could not mark ${v.file} ${v.status}`, e),
   });
 }
 

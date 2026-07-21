@@ -450,6 +450,144 @@ def _has_raw_scrape(platform) -> bool:
     return any(pdir(platform).glob("*_raw*.json"))
 
 
+def _watchlist(platform):
+    """Handles on the watchlist — the non-comment lines of pages.txt.
+
+    This is the count the Board's Sources node wants. It used to show `creators`, which
+    counts distinct creators in the SCORED corpus, so a freshly added handle read as
+    "0 pages" until two more stages had run.
+    """
+    pf = pdir(platform) / "pages.txt"
+    if not pf.exists():
+        return []
+    return [l.strip() for l in pf.read_text(encoding="utf-8").splitlines()
+            if l.strip() and not l.lstrip().startswith("#")]
+
+
+# Counting reels means parsing the raw scrape dump, which runs to tens of MB — far too
+# expensive to redo on every /api/platforms poll. The file is rewritten wholesale by a
+# scrape and never appended to, so (mtime_ns, size) is a sound cache key: any new scrape
+# changes at least one of them.
+_RAW_COUNT_CACHE: dict = {}
+
+
+def _scraped_count(platform) -> int:
+    """How many items the last scrape actually pulled, straight from the raw dumps.
+
+    The raw shape is {handle: [item, ...]} for every platform (see each normalize.py).
+    Anything unparseable counts as zero rather than raising — a half-written dump during
+    a live scrape must not 500 the endpoint the whole Dashboard polls.
+    """
+    total = 0
+    for f in sorted(pdir(platform).glob("*_raw*.json")):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        key = (str(f), st.st_mtime_ns, st.st_size)
+        if key not in _RAW_COUNT_CACHE:
+            _RAW_COUNT_CACHE.clear()          # bounded: one entry per live raw file
+            try:
+                data = json.loads(f.read_text(encoding="utf-8"))
+                _RAW_COUNT_CACHE[key] = sum(
+                    len(v) for v in data.values() if isinstance(v, list)
+                ) if isinstance(data, dict) else 0
+            except (OSError, json.JSONDecodeError, AttributeError):
+                _RAW_COUNT_CACHE[key] = 0
+        total += _RAW_COUNT_CACHE[key]
+    return total
+
+
+GEMINI_ENV_VARS = ("GEMINI_API_KEY", "GEMINI_KEY", "GOOGLE_API_KEY")
+
+
+def _gemini_key_present() -> bool:
+    """Is a Gemini key reachable by the agents that need one? PRESENCE ONLY.
+
+    The value is never read into a variable, never returned, never logged — same contract
+    as /api/config/agent/{agent}/secrets/status. The hub checks its own environment first,
+    then looks for a non-empty assignment in the sibling agents' gitignored .env files,
+    because that is where ./init puts the key and the hub does not inherit it.
+    """
+    if any(os.environ.get(v) for v in GEMINI_ENV_VARS):
+        return True
+    # Sibling agent dirs spelled out rather than reusing ANALYSIS_ENGINE_DIR: that
+    # constant is defined ~1100 lines below with the stage commands, and depending on
+    # the deferred binding would be a trap for the next person who moves either one.
+    for d in (ROOT.parent / "AnalysisEngine", ROOT.parent / "SimilarContent"):
+        f = d / ".env"
+        try:
+            text = f.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            if name.strip() in GEMINI_ENV_VARS and value.strip().strip("'\""):
+                return True
+    return False
+
+
+def _media_count(platform) -> int:
+    d = ROOT / "media" / platform
+    if not d.is_dir():
+        return 0
+    # ref_*.mp4 are operator-supplied reference clips, not corpus media — the blueprint
+    # stage works off the corpus, so they must not make it look ready.
+    return sum(1 for f in d.glob("*.mp4") if not f.name.startswith("ref_"))
+
+
+def stage_readiness(platform):
+    """Can each stage do anything useful right now, and if not, what unblocks it?
+
+    Every one of these stages already refuses cleanly with a precise message — "no
+    creators given — fill pages.txt", "no scraped data — scrape first", "no content.json
+    — run analyze first", "no Gemini key in env". The problem was never the backend: it
+    was that the only way to read those messages was to run the stage, let it fail, and
+    squint at a truncated subprocess tail inside a board node. This exposes the same
+    preconditions BEFORE the click, so the Dashboard can disable a doomed Run and name
+    the stage that would fix it.
+
+    `blocked_by` is a stage the user can run to clear the block — the one-click fix. It
+    is None when running something else cannot help (a missing API key, an empty
+    watchlist), in which case `reason` says what the human has to do instead.
+    """
+    has_watchlist = bool(_watchlist(platform))
+    has_raw = _has_raw_scrape(platform)
+    has_corpus = (pdir(platform) / "content.json").exists()
+    has_media = _media_count(platform) > 0
+    has_key = _gemini_key_present()
+
+    def st(ready, blocked_by=None, reason=""):
+        return {"ready": ready, "blocked_by": blocked_by, "reason": reason}
+
+    out = {
+        "scrape": st(has_watchlist, None,
+                     "" if has_watchlist else
+                     "No creators on the watchlist. Add a handle in Config first."),
+        "analyze": st(has_raw, "scrape",
+                      "" if has_raw else "Nothing scraped yet — run Scrape first."),
+        "media": st(has_corpus, "analyze",
+                    "" if has_corpus else "No scored corpus yet — run Analyze first."),
+    }
+    # The blueprint stage needs BOTH persisted clips and a key. Report the missing
+    # prerequisite that comes first in the pipeline, so following the chain terminates.
+    if not has_media:
+        out["analysis-engine"] = st(False, "media",
+                                    "No clips persisted yet — run Media first.")
+    elif not has_key:
+        out["analysis-engine"] = st(
+            False, None,
+            "No Gemini key. Set GEMINI_API_KEY in AnalysisEngine/.env, then restart the hub.")
+    else:
+        out["analysis-engine"] = st(True)
+    # Discovery is opt-in and never part of the core run; it has no corpus precondition.
+    out["auto-search"] = st(True)
+    return out
+
+
 @app.get("/api/platforms")
 def platforms():
     out = []
@@ -462,12 +600,49 @@ def platforms():
             # Read off the filesystem so it survives a hub restart — the job ledger,
             # the only other evidence a scrape had run, is in-memory and does not.
             "scraped": _has_raw_scrape(p),
+            # Counts the Board needs BEFORE analyze has run, so a node can report its own
+            # stage instead of the end of the pipeline: watchlist size the moment a handle
+            # is added, reels pulled the moment a scrape finishes.
+            "watchlist": len(_watchlist(p)),
+            "scraped_items": _scraped_count(p),
+            "readiness": stage_readiness(p),
             "items": len(rows), "creators": len({r["creator"] for r in rows}),
             "viral": sum(1 for r in rows if r.get("tier") == "Viral"),
             "media_ready": sum(1 for r in rows if r.get("video_local")),
             "analyzed": sum(1 for r in rows if r.get("analyzed")),
         })
     return out
+
+def _write_pages(platform, handles):
+    """Reconcile pages.txt with the watchlist the Dashboard sent, keeping the file's prose.
+
+    GET /api/config strips comments and blank lines before handing the list to the UI, so
+    writing `"\\n".join(pages)` straight back — which is what this used to do — permanently
+    deleted every comment in the file on the first save. pages.txt ships from
+    pages.txt.example as an annotated file explaining what belongs in it; a new user's very
+    first "add a handle" silently destroyed that.
+
+    Comment and blank lines keep their positions, handles that survived keep theirs, removed
+    handles go, and additions land at the end.
+    """
+    pf = pdir(platform) / "pages.txt"
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    wanted = [h.strip() for h in handles if h and h.strip()]
+    remaining = list(dict.fromkeys(wanted))          # de-duped, order preserved
+    out = []
+    prior = pf.read_text(encoding="utf-8").splitlines() if pf.exists() else []
+    for line in prior:
+        bare = line.strip()
+        if not bare or bare.startswith("#"):
+            out.append(line)                          # prose and spacing survive verbatim
+            continue
+        if bare in remaining:
+            out.append(line)
+            remaining.remove(bare)                    # kept in place, not re-appended
+        # else: the handle was removed from the watchlist — drop the line
+    out.extend(remaining)                             # whatever is new goes at the end
+    pf.write_text("\n".join(out).rstrip("\n") + "\n", encoding="utf-8")
+
 
 # ---------------- config (one place) ----------------
 @app.get("/api/config/{platform}")
@@ -490,7 +665,7 @@ def put_config(platform, body: ConfigUpdate):
     if body.config is not None:
         (d / "niche_config.json").write_text(json.dumps(body.config, indent=2), encoding="utf-8")
     if body.pages is not None:
-        (d / "pages.txt").write_text("\n".join(body.pages) + "\n", encoding="utf-8")
+        _write_pages(platform, body.pages)
     return {"ok": True}
 
 # ---------------- corpus + content ----------------
@@ -1569,6 +1744,27 @@ def _stage_env():
     return env
 
 
+TAIL_CHARS = 1200
+
+
+def _job_tail(stdout, stderr) -> str:
+    """The last of what a stage said, keeping BOTH streams.
+
+    This was `(stdout or stderr or "")[-400:]` — an `or`, so a stage that wrote a single
+    progress line to stdout had its entire stderr discarded. Every stage here logs
+    progress to stdout and errors to stderr, which meant the failure reason was thrown
+    away in precisely the case anyone needed it: the Dashboard showed a red node whose
+    tail was the last routine progress line, and nothing anywhere in the app said why.
+
+    stderr goes last so that when the combined text is truncated it is the routine
+    progress that gets cut, never the error.
+    """
+    out = (stdout or "").strip()
+    err = (stderr or "").strip()
+    parts = [p for p in (out, err) if p]
+    return "\n".join(parts)[-TAIL_CHARS:]
+
+
 def _run_job(job_id, cmd, cwd):
     JOBS[job_id]["status"] = "running"
     log.info("job started", extra={"job_id": job_id, "cmd": " ".join(cmd)})
@@ -1577,10 +1773,15 @@ def _run_job(job_id, cmd, cwd):
                            env=_stage_env())
         JOBS[job_id]["rc"] = r.returncode
         JOBS[job_id]["status"] = "done" if r.returncode == 0 else "error"
-        JOBS[job_id]["tail"] = (r.stdout or r.stderr or "")[-400:]
+        JOBS[job_id]["tail"] = _job_tail(r.stdout, r.stderr)
         log.info("job finished", extra={"job_id": job_id, "rc": r.returncode, "status": JOBS[job_id]["status"]})
     except Exception as e:
-        JOBS[job_id]["status"] = "error"; JOBS[job_id]["tail"] = str(e)
+        JOBS[job_id]["status"] = "error"
+        # NOT None. `_run_stage_blocking` returns this rc, and the run-all supervisor reads
+        # None as "unknown stage, skip cleanly" — so a stage that crashed outright used to
+        # let the rest of the pipeline run on regardless.
+        JOBS[job_id]["rc"] = -1
+        JOBS[job_id]["tail"] = str(e)
         log.error("job crashed", extra={"job_id": job_id, "err": str(e)})
     JOBS[job_id]["ended"] = time.time()
     # Surface a failed pipeline stage on the central activity log so it shows up in the
@@ -1630,25 +1831,20 @@ def _launch_stage_job(platform, stage, cmd_kwargs=None, extra_args=None,
     return job_id
 
 
-@app.post("/api/pipeline/{platform}/{stage}")
-def run_stage(platform, stage):
-    try:
-        job_id = _launch_stage_job(platform, stage)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return {"job_id": job_id}
-
-
 # The CORE pipeline, in dependency order. Discovery (auto-search) is intentionally excluded —
 # it's opt-in and gated behind human review, never part of the one-click core run.
 RUN_ALL_STAGES = ["scrape", "analyze", "media", "analysis-engine"]
 
 
-def _run_stage_blocking(platform, stage):
+def _run_stage_blocking(platform, stage, run_id=None):
     """Same job-setup as `_launch_stage_job` (same JOBS entry shape, same SSE visibility)
     but runs the subprocess SYNCHRONOUSLY on the calling thread instead of spawning a
     daemon. Returns the stage's return code (JOBS[job_id]["rc"]), or None if the stage key
-    is unknown (skipped cleanly)."""
+    is unknown (skipped cleanly).
+
+    `run_id` is stamped onto the job so the Dashboard can tell which stages belong to one
+    "Run full pipeline" click. It used to be generated, returned to the caller, and then
+    attached to nothing at all."""
     global _JOB_SEQ
     if stage not in STAGE_CMD:
         return None
@@ -1657,9 +1853,16 @@ def _run_stage_blocking(platform, stage):
         _JOB_SEQ += 1
         job_id = f"{platform}:{stage}:{_JOB_SEQ}"
     JOBS[job_id] = {"platform": platform, "stage": stage, "status": "queued",
-                    "started": time.time(), "ended": None, "rc": None, "tail": ""}
+                    "started": time.time(), "ended": None, "rc": None, "tail": "",
+                    "run_id": run_id}
     _run_job(job_id, cmd, cwd)   # blocks until this stage finishes (sets rc/status/tail/ended)
     return JOBS[job_id].get("rc")
+
+
+# Platforms with a run-all in flight. A second click used to start a second supervisor over
+# the same files — two scrapes writing one reels_raw.json, an analyze reading it mid-write.
+_RUNNING_ALL: set = set()
+_RUNNING_ALL_LOCK = threading.Lock()
 
 
 def _run_all_supervisor(platform, run_id, stages):
@@ -1667,16 +1870,38 @@ def _run_all_supervisor(platform, run_id, stages):
     finish before starting the next. Unknown stage keys are skipped cleanly. If any stage
     exits non-zero, STOP — later stages are not run and the run is marked failed."""
     log.info("run-all started", extra={"run_id": run_id, "platform": platform, "stages": stages})
-    for stage in stages:
-        rc = _run_stage_blocking(platform, stage)
-        if rc is None:
-            log.warning("run-all skipping unknown stage", extra={"run_id": run_id, "stage": stage})
-            continue
-        if rc != 0:
-            log.error("run-all halted on stage failure",
-                      extra={"run_id": run_id, "stage": stage, "rc": rc})
-            return
-    log.info("run-all finished", extra={"run_id": run_id, "platform": platform})
+    try:
+        for stage in stages:
+            rc = _run_stage_blocking(platform, stage, run_id=run_id)
+            if rc is None:
+                log.warning("run-all skipping unknown stage",
+                            extra={"run_id": run_id, "stage": stage})
+                continue
+            if rc != 0:
+                log.error("run-all halted on stage failure",
+                          extra={"run_id": run_id, "stage": stage, "rc": rc})
+                # The per-stage failure is already on the activity log; this says the RUN
+                # stopped, and where. Without it the log showed one red stage and simply
+                # nothing afterwards, which reads the same as a run still in progress.
+                _record_run_all_halt(platform, run_id, stage, rc, stages)
+                return
+        log.info("run-all finished", extra={"run_id": run_id, "platform": platform})
+    finally:
+        with _RUNNING_ALL_LOCK:
+            _RUNNING_ALL.discard(platform)
+
+
+def _record_run_all_halt(platform, run_id, stage, rc, stages):
+    remaining = stages[stages.index(stage) + 1:] if stage in stages else []
+    skipped = f" — {', '.join(remaining)} not run" if remaining else ""
+    rec = {"ts": time.time(), "agent": "pipeline", "level": "error", "event": "run_halted",
+           "msg": f"Full pipeline stopped at {stage} (rc {rc}){skipped}",
+           "platform": platform, "run_id": run_id,
+           "data": {"stage": stage, "rc": rc, "skipped": remaining}}
+    try:
+        _append_jsonl(LOGS_FILE, rec); _push_log(rec)
+    except Exception:
+        log.exception("failed to record run-all halt to activity log")
 
 
 @app.post("/api/pipeline/{platform}/run-all")
@@ -1687,11 +1912,59 @@ def run_all(platform):
     non-zero stage halts the sequence."""
     if platform not in PLATFORMS:
         raise HTTPException(404, f"unknown platform {platform}")
-    with _JOB_SEQ_LOCK:
-        run_id = f"{platform}:run-all:{int(time.time())}"
-    stages = list(RUN_ALL_STAGES)
-    threading.Thread(target=_run_all_supervisor, args=(platform, run_id, stages), daemon=True).start()
+    # One run per platform. A second click used to start a second supervisor over the same
+    # files: two scrapes rewriting one reels_raw.json, an analyze reading it half-written.
+    with _RUNNING_ALL_LOCK:
+        if platform in _RUNNING_ALL:
+            raise HTTPException(409, f"a full pipeline run is already in progress for {platform}")
+        _RUNNING_ALL.add(platform)
+    try:
+        # Refuse a run that cannot get past its first stage, with the reason the stage
+        # itself would have given — rather than spawning it to fail four seconds later.
+        ready = stage_readiness(platform).get(RUN_ALL_STAGES[0], {})
+        if not ready.get("ready", True):
+            raise HTTPException(409, ready.get("reason") or "the pipeline is not ready to run")
+        with _JOB_SEQ_LOCK:
+            run_id = f"{platform}:run-all:{int(time.time())}"
+        stages = list(RUN_ALL_STAGES)
+        threading.Thread(target=_run_all_supervisor, args=(platform, run_id, stages),
+                         daemon=True).start()
+    except BaseException:
+        with _RUNNING_ALL_LOCK:      # the supervisor never started, so it cannot clear this
+            _RUNNING_ALL.discard(platform)
+        raise
     return {"run_id": run_id, "stages": stages}
+
+
+# ---- the catch-all, LAST ------------------------------------------------------------
+# Starlette resolves routes in registration order, so this must stay below /run-all. It
+# used to be declared ~100 lines above it, which meant POST /api/pipeline/{p}/run-all was
+# swallowed here as stage="run-all" and answered 400 "stage must be one of [...]" — the
+# Run full pipeline button never once started a pipeline. The Dashboard defines no
+# onError, so the 400 was discarded and the click looked like it did nothing at all.
+# Same rule the media/renders/documentation mounts already follow above.
+@app.post("/api/pipeline/{platform}/{stage}")
+def run_stage(platform, stage, force: bool = False):
+    """Launch one stage.
+
+    Refuses with 409 when the stage's input is not there yet. The stages themselves have
+    always refused cleanly ("no scraped data — scrape first"), but only after being
+    spawned, so the reason arrived as a subprocess tail and every Run button looked
+    equally live. Checking up front lets the Dashboard grey the button and name the stage
+    that unblocks it — and keeps that guarantee for anything driving the API directly.
+
+    `?force=true` is the deliberate escape hatch: the readiness check is a convenience,
+    not a security boundary, and an operator who knows better should not have to fight it.
+    """
+    if not force:
+        r = stage_readiness(platform).get(stage)
+        if r and not r["ready"]:
+            raise HTTPException(409, r["reason"])
+    try:
+        job_id = _launch_stage_job(platform, stage)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"job_id": job_id}
 
 
 # ---------------- discovery heartbeat scheduler + kill-switch (PIPELINE.md §11.1/§11.2) ----------------
