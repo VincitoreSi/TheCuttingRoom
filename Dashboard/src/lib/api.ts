@@ -156,7 +156,9 @@ export const api = {
     fetchJson<{ job_id: string }>(`/api/pipeline/${p}/${stage}`, { method: "POST" }),
 
   runAll: (p: string) =>
-    fetchJson<{ run_id: string; stages: string[] }>(`/api/pipeline/${p}/run-all`, { method: "POST" }),
+    fetchJson<{ run_id: string; stages: string[] }>(`/api/pipeline/${p}/run-all`, {
+      method: "POST",
+    }),
 
   pipelineStatus: () => fetchJson<Record<string, unknown>>("/api/pipeline/status"),
 };

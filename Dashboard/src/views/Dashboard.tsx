@@ -3,7 +3,14 @@ import { motion } from "framer-motion";
 import { sectionMotion } from "../lib/motion";
 import type { Tone } from "../lib/statusTone";
 import { useShell } from "../App";
-import { usePlatforms, useRunStage, useRunAll, useFactors, useProducers, useConfig } from "../lib/hooks";
+import {
+  usePlatforms,
+  useRunStage,
+  useRunAll,
+  useFactors,
+  useProducers,
+  useConfig,
+} from "../lib/hooks";
 import { PipelineBoard } from "../components/PipelineBoard";
 import { CountUp } from "../components/gauges";
 import { Badge, Button, Card, EmptyState, Eyebrow, SectionHead } from "../components/ui";
@@ -379,7 +386,10 @@ function JobRow({ job }: { job: Job }) {
   return (
     <div className="py-2">
       <div
-        className={cx("flex items-center justify-between text-[13px]", canExpand && "cursor-pointer")}
+        className={cx(
+          "flex items-center justify-between text-[13px]",
+          canExpand && "cursor-pointer",
+        )}
         onClick={toggle}
         role={canExpand ? "button" : undefined}
         tabIndex={canExpand ? 0 : undefined}

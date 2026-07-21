@@ -95,10 +95,14 @@ step "Dashboard"
 if [ ! -d "$ROOT/Dashboard/node_modules" ]; then
   record "Dashboard deps" skip "node_modules missing — run ./init first"
 else
-  [ "$FIX" -eq 1 ] && ( cd "$ROOT/Dashboard" && npx prettier --write "src/**/*.{ts,tsx,css}" >/dev/null 2>&1 )
+  [ "$FIX" -eq 1 ] && ( cd "$ROOT/Dashboard" && npx prettier --write . >/dev/null 2>&1 )
   run "typecheck (tsc)"  "$ROOT/Dashboard" npx tsc --noEmit
   run "unit tests (vitest)" "$ROOT/Dashboard" npx vitest run
   run "lint (eslint)"    "$ROOT/Dashboard" npm run lint
+  # ci-dashboard.yml runs this too. Without it here, ./health goes green on a tree that CI
+  # then rejects — which is exactly what happened on the first push. `--fix` rewrites.
+  # Scope must match ci-dashboard.yml's `prettier --check .`, not just src/**.
+  run "format (prettier)" "$ROOT/Dashboard" npm run format:check
   if [ "$QUICK" -eq 0 ]; then
     run "production build" "$ROOT/Dashboard" npm run build
   else

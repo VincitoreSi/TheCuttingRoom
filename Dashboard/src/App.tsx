@@ -77,17 +77,17 @@ export function App() {
               {/* Keyed by view: a crash is contained to the view that caused it, and
                   navigating away and back gives a clean remount rather than a stuck panel. */}
               <ErrorBoundary key={view}>
-              {view === "dashboard" && <Dashboard onNavigate={setView} />}
-              {view === "discover" && <DiscoveryView />}
-              {view === "corpus" && <Corpus />}
-              {view === "sounds" && <SoundsView />}
-              {view === "proposals" && <StudioView />}
-              {view === "producers" && <ProducersView />}
-              {view === "activity" && <ActivityView />}
-              {view === "evals" && <EvalsView onNavigate={setView} />}
-              {view === "playbook" && <PlaybookView />}
-              {view === "config" && <ConfigView />}
-              {view === "agent" && selectedAgent && <AgentBoardView name={selectedAgent} />}
+                {view === "dashboard" && <Dashboard onNavigate={setView} />}
+                {view === "discover" && <DiscoveryView />}
+                {view === "corpus" && <Corpus />}
+                {view === "sounds" && <SoundsView />}
+                {view === "proposals" && <StudioView />}
+                {view === "producers" && <ProducersView />}
+                {view === "activity" && <ActivityView />}
+                {view === "evals" && <EvalsView onNavigate={setView} />}
+                {view === "playbook" && <PlaybookView />}
+                {view === "config" && <ConfigView />}
+                {view === "agent" && selectedAgent && <AgentBoardView name={selectedAgent} />}
               </ErrorBoundary>
             </motion.div>
           </main>

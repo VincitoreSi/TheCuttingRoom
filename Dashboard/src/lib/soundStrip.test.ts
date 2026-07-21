@@ -13,13 +13,7 @@ const BLOCK = [
   "- **If not reusable, substitute:** Use an upbeat synth-pop track in the same mood.",
 ].join("\n");
 
-const PROPOSAL = [
-  "# An example clone recipe title",
-  "",
-  BLOCK,
-  "",
-  "## Shot list",
-].join("\n");
+const PROPOSAL = ["# An example clone recipe title", "", BLOCK, "", "## Shot list"].join("\n");
 
 describe("parseAudioBlock", () => {
   it("reads every bullet of a full block", () => {

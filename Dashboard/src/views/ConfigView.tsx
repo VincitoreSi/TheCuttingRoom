@@ -309,8 +309,8 @@ export function ConfigView() {
                 under a live header that reads as a rendering failure. */}
             {pages.length === 0 && (
               <p className="text-[13px] text-[var(--ink-dim)] py-2">
-                No handles yet. Add the creators you want to mine below — this is where the
-                pipeline starts.
+                No handles yet. Add the creators you want to mine below — this is where the pipeline
+                starts.
               </p>
             )}
             {pages.map((p) => (

@@ -31,8 +31,7 @@ export function deriveOnboarding(args: {
 }): Onboarding {
   const { pagesCount, summary, jobs } = args;
 
-  const jobDone = (stage: string) =>
-    jobs.some((j) => j.stage === stage && j.status === "done");
+  const jobDone = (stage: string) => jobs.some((j) => j.stage === stage && j.status === "done");
   // The scored corpus only materializes AFTER both scrape and analyze have run, so
   // `items > 0` is the durable "both done" signal that survives a hub restart. The
   // live job ledger lets us check each stage off the instant its job finishes —

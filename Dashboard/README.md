@@ -41,13 +41,13 @@ and no port to configure.
 
 ## Scripts
 
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Vite dev server with HMR |
-| `npm run build` | Type-check (`tsc`) then production build |
-| `npm test` | Run the Vitest suite |
-| `npm run lint` | ESLint over the project |
-| `npm run format` | Prettier write (`format:check` to verify) |
+| Command          | What it does                                                                        |
+| ---------------- | ----------------------------------------------------------------------------------- |
+| `npm run dev`    | Vite dev server with HMR                                                            |
+| `npm run build`  | Type-check (`tsc`) then production build                                            |
+| `npm test`       | Run the Vitest suite                                                                |
+| `npm run lint`   | ESLint over the project                                                             |
+| `npm run format` | Prettier write (`format:check` to verify)                                           |
 | `npm run deploy` | Build and copy `dist/` into `$BACKEND_DIR/frontend/dist` (default `../ReelScraper`) |
 
 ## Layout
