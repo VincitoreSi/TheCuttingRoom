@@ -26,8 +26,23 @@
 #     .git/                                  the whole history, incl. any .env ever committed
 #   Deleting them in a later RUN does not remove them from the image.
 #
-# THIS FILE IS THE BELT, NOT THE BRACES.
-#   Release images are built from a clean git export, never from a working tree:
+# THESE ARE TWO FILTERS FOR TWO LANES, NOT A BELT AND BRACES. MEASURED 2026-07-22:
+#
+#   lane                                          the filter actually doing the work
+#   --------------------------------------------  ------------------------------------------
+#   git archive HEAD | docker build -  (release)  git archive.  THIS FILE IS NOT APPLIED.
+#   docker compose build / context: .. (./cr)     THIS FILE. It is the ONLY filter.
+#
+#   BuildKit reports `[internal] load remote build context` -> `copy /context /` for a tar
+#   stream and applies no ignore rules to it: a probe image built from `git archive HEAD |
+#   docker build -` contains `.pre-commit-config.yaml` and `.github/`, both denied below.
+#   That lane is safe because the git export carries none of the forbidden classes — not
+#   because of this file. Conversely a probe built with the context set to the real 561 MB
+#   working tree (five real .env files, .git, ReelScraper/media/, platforms/x/session.txt)
+#   came out at 305 files with none of it. Neither lane is covered twice, so DO NOT weaken
+#   either one on the assumption that the other backstops it.
+#
+#   Release images are still built from a clean git export, never from a working tree:
 #       git archive HEAD | docker build -f docker/Dockerfile -t cuttingroom:<tag> -
 #   because .dockerignore cannot express "the COMMITTED version of this tracked file", and
 #   ReelScraper/memory/<platform>/patterns.md and MEMORY.md are git-tracked AND agent-mutated
