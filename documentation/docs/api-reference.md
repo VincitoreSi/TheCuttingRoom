@@ -25,7 +25,47 @@ Three IDs tie the whole surface together. Keep them in view while reading the ta
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/platforms` | List supported platforms (`instagram`, `x`, `youtube`) with a per-platform summary: `items`, `creators`, `viral`, `media_ready`, `analyzed`, plus two distinct readiness flags — **`scraped`** (raw `*_raw*.json` output is on disk) and **`has_data`** (a *scored* corpus exists). `scraped && !has_data` means the scrape finished but `analyze` has not run: reels are on disk, nothing has ranked them, and every corpus view will be empty until it does. `scraped` is read from the filesystem, so it survives a hub restart — the job ledger does not. |
+| `GET /api/platforms` | Supported platforms (`instagram`, `x`, `youtube`), each with a summary and a per-stage readiness map. See below. |
+
+### The platform summary
+
+Counts here belong to **different stages**, and mixing them up is the classic way to
+report a working pipeline as an empty one.
+
+| Field | Comes from | Non-zero after |
+|---|---|---|
+| `watchlist` | `pages.txt` | you add a handle |
+| `scraped_items` | `<content>_raw*.json` | `scrape` |
+| `scraped` | same files, as a boolean | `scrape` |
+| `items` · `creators` · `viral` | `content.json` | `analyze` |
+| `media_ready` | `media/<p>/*.mp4` | `media` |
+| `analyzed` | blueprint coverage | `analysis-engine` |
+| `has_data` | `content.json` exists | `analyze` |
+
+`scraped && !has_data` means the scrape finished but nothing has scored it — reels are on
+disk and every corpus view stays empty until `analyze` runs. `watchlist` is **not**
+`creators`: the latter counts the scored corpus, so it reads 0 for a handle you added a
+moment ago. All of these are read from the filesystem, so they survive a hub restart; the
+job ledger does not.
+
+### `readiness`
+
+A map of stage → `{ready, blocked_by, reason}`, reporting each stage's precondition
+*before* it is launched. The stages have always refused cleanly when their input is missing
+("no scraped data — scrape first"), but only after being spawned, so the reason arrived as
+a subprocess tail.
+
+`blocked_by` names a stage you can run to clear the block — following it terminates at
+something only a human can do (add a handle, set an API key), at which point `blocked_by`
+is `null` and `reason` says what that is.
+
+```json
+"readiness": {
+  "scrape":  {"ready": false, "blocked_by": null,      "reason": "No creators on the watchlist. Add a handle in Config first."},
+  "analyze": {"ready": false, "blocked_by": "scrape",  "reason": "Nothing scraped yet — run Scrape first."},
+  "media":   {"ready": false, "blocked_by": "analyze", "reason": "No scored corpus yet — run Analyze first."}
+}
+```
 
 ---
 
@@ -371,10 +411,48 @@ Stage jobs are launched generically and tracked as background subprocesses; the 
 
 | Method & path | Purpose |
 |---|---|
-| `POST /api/pipeline/{platform}/{stage}` | Launch a single stage subprocess job. `stage` ∈ `scrape`, `analyze`, `media`, `analysis-engine`, `auto-search`, `auto-search-beat`, `render`. Returns `{job_id}`. |
-| `POST /api/pipeline/{platform}/run-all` | Launch the one-click core pipeline: the stages in `RUN_ALL_STAGES` (`scrape → analyze → media → analysis-engine`) chained in order. **`render` is deliberately excluded** — it spends model credits and only runs on an explicit per-item human trigger. Returns `{job_id}`. |
-| `GET /api/pipeline/status` | Snapshot of all jobs (queued/running/done/error, return code, output tail). |
+| `POST /api/pipeline/{platform}/{stage}` | Launch a single stage subprocess job. `stage` ∈ `scrape`, `analyze`, `media`, `analysis-engine`, `auto-search`, `auto-search-beat`, `render`. Returns `{job_id}`. **409** with the reason when the stage's input is not ready (see `readiness` above); `?force=true` overrides — readiness is a convenience, not a security boundary. |
+| `POST /api/pipeline/{platform}/run-all` | Launch the one-click core pipeline: the stages in `RUN_ALL_STAGES` (`scrape → analyze → media → analysis-engine`) chained in order. **`render` is deliberately excluded** — it spends model credits and only runs on an explicit per-item human trigger. Returns `{run_id, stages}`; every stage job of the run carries that `run_id`. **409** if a run is already in flight for the platform, or if the first stage cannot run. |
+| `GET /api/pipeline/status` | Snapshot of all jobs (queued/running/done/error, return code, output tail, `run_id`). |
+| `GET /api/schedule` | Per-platform automatic-run settings, plus the derived `stages` and `next_run_at`. |
+| `PUT /api/schedule/{platform}` | `{enabled?, every_hours?, include_blueprints?}` — every field optional. |
 | `GET /api/events` | SSE stream — see below. |
+
+!!! note "A stage's failure tail carries both streams"
+
+    `JOBS[...].tail` is stdout **and** stderr, stderr last so truncation eats routine
+    progress rather than the error. It used to be `stdout or stderr`, which meant any
+    stage that printed a progress line lost its entire stderr — discarding the reason in
+    exactly the case anyone needed it.
+
+### Scheduled runs
+
+`GET /api/schedule` returns a row per platform:
+
+```json
+{"instagram": {"enabled": false, "every_hours": 24, "include_blueprints": false,
+               "last_run_at": 0, "stages": ["scrape", "analyze", "media"],
+               "next_run_at": null}}
+```
+
+**The hub must be running.** There is no daemon outside it — deliberately, since the
+project depends on no cron and no hosted service — so a schedule is best-effort "while you
+have this open", not a guarantee.
+
+Scheduled runs do **free stages only** (`scrape → analyze → media`). `analysis-engine`
+calls a paid API once per clip, and unattended on a daily timer that adds up, so it is
+opt-in per platform via `include_blueprints` — the same reasoning that keeps `render` out
+of `RUN_ALL_STAGES`.
+
+Behaviour worth knowing:
+
+- `last_run_at` is persisted and stamped **before** the run launches, so a run that outlives
+  the tick interval cannot come due again mid-flight, and restarting the hub neither
+  re-fires nor loses the schedule.
+- Enabling stamps the clock, so switching it on does not immediately fire.
+- A platform with no watchlist is skipped quietly rather than starting a run that exists
+  only to fail.
+- The config read fails closed: any problem resolves to disabled.
 
 `analysis-engine` shells out to the sibling `../AnalysisEngine` (`uv run cli.py run <p>`); `auto-search` / `auto-search-beat` shell out to `../AutoSearch` (`uv run cli.py run|beat <p>`). Every other stage runs in-process inside `ReelScraper`.
 

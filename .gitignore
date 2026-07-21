@@ -170,3 +170,6 @@ demodataset.zip
 !/demo-data/data/
 /demo-data/data/*
 !/demo-data/data/.gitkeep
+
+# Local archives written by ./clean before it wipes anything. Real scraped data.
+backups/

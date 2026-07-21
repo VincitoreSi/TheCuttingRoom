@@ -209,7 +209,18 @@ else
   record "working data ignored" skip "no git"
 fi
 
-# (e) the hub must not have grown a non-loopback bind
+# (e) the root entry points must stay runnable. `git update-index --chmod` and a stray
+# `cp` both drop the executable bit silently, and a README that says `./clean` while the
+# file is 644 fails at the exact moment someone is trying to recover.
+notx=""
+for s in init demo stop clean health docsite; do
+  [ -f "$ROOT/$s" ] || { notx="$notx $s(missing)"; continue; }
+  [ -x "$ROOT/$s" ] || notx="$notx $s"
+done
+[ -z "$notx" ] && record "entry points executable" pass "6 scripts" \
+               || record "entry points executable" fail "not executable:$notx"
+
+# (f) the hub must not have grown a non-loopback bind
 # grep, not git grep, so this holds outside a work tree too.
 if grep -rqn '0\.0\.0\.0' "$ROOT/ReelScraper/cli.py" "$ROOT/ReelScraper/api" 2>/dev/null; then
   record "hub binds loopback only" fail "found a 0.0.0.0 bind"

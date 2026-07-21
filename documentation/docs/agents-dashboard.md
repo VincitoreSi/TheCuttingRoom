@@ -66,7 +66,7 @@ The board is organized around the pipeline's stages and the hub's resource group
 
 | View | Backed by | Purpose |
 |---|---|---|
-| Board | `POST /api/pipeline/{platform}/{stage}`, `GET /api/pipeline/status` | the live pipeline tape — launch stage jobs and watch them flow node-to-node |
+| Board | `POST /api/pipeline/{platform}/{stage}`, `.../run-all`, `GET /api/pipeline/status`, `GET /api/platforms` | the live pipeline tape — launch stage jobs and watch them flow node-to-node (see [The Board](#the-board)) |
 | Corpus | `GET /api/corpus/{platform}/*`, `GET /api/content/{platform}`, `GET /api/analysis/{platform}[/{content_id}]` | factors, top-N viral clips, the scored content board, and schema_version-2 blueprint breakdowns |
 | Sounds | `GET /api/audio/{platform}/trending`, `.../sound/{audio_id}` | trending-sound table and per-sound detail |
 | Studio + Gate | `GET/POST /api/studio/{platform}`, `POST /api/studio/{platform}/{file}/status`, `POST /api/studio/{platform}/{file}/render`, `GET /api/renders/{platform}` | producer proposals, the human approve/reject gate, and the rendered reels (see [The Studio](#the-studio-proposals-renders)) |
@@ -76,9 +76,42 @@ The board is organized around the pipeline's stages and the hub's resource group
 | Activity | `GET /api/events` (`log` channel), `GET /api/logs` | the Floor Log — lifecycle events grouped into per-run threads across every agent |
 | Evals | `GET /api/evals` | score-trend charts (Recharts) per agent/target type |
 | Playbook | `GET/POST /api/insights`, `GET /api/corpus/{platform}/factors` | the winning formula, the ranked lift field, and the shared cross-agent memory exchange |
-| Config | `GET/PUT /api/config/{platform}` | the Bench — niche weights, keywords, and `pages.txt` |
+| Config | `GET/PUT /api/config/{platform}`, `GET/PUT /api/schedule[/{platform}]` | the Bench — niche weights, keywords, `pages.txt`, and automatic runs |
 
 See [Pipeline](architecture.md) for how these views map onto the seven pipeline stages, and [API Reference](api-reference.md) for the full route contract.
+
+## The Board
+
+Each card reports **its own stage**, not the end of the pipeline. That distinction is the
+whole point: `watchlist` moves when you add a handle, `scraped_items` when the scrape
+finishes, `items`/`viral` only after `analyze`. Reading them all off the scored corpus — as
+the board once did — meant a freshly added handle showed "0 pages" and 250 scraped reels
+showed "0 reels" until two more stages had run, so a working pipeline was indistinguishable
+from a broken one.
+
+| Card | Count | Action |
+|---|---|---|
+| Discover | pending candidates | Run `auto-search` |
+| **Sources** | `watchlist` | **Add pages** → the watchlist in Config |
+| Scrape | `scraped_items` | Run, or the reason it cannot |
+| Analyze | `items` scored · `viral` | ” |
+| Media | `media_ready` | ” |
+| Blueprint | `analyzed` | ” |
+| Studio | proposals | Open board |
+
+Sources is not a runnable stage — its input is a human adding handles — so instead of a Run
+button it carries the one link that changes its number. Every other empty state in the app
+routes to the same place, and stops offering it once handles exist.
+
+A stage whose input is missing is greyed out, states why, and offers the stage that would
+unblock it (`readiness.blocked_by`); following that chain terminates at something only a
+human can do. **Run full pipeline** stays disabled while any stage is running, rather than
+re-enabling the moment the POST returns.
+
+Failures surface in the header status, which carries the failing stage's last output line
+and opens the Floor Log. Refused requests raise a toast carrying the hub's own sentence —
+before this, every mutation swallowed its error and a rejected click looked like nothing at
+all had happened.
 
 ## The Studio: Proposals | Renders
 

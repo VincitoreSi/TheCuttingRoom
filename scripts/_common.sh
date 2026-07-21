@@ -92,16 +92,91 @@ hub_responding() { curl -sf -o /dev/null --max-time 2 "$1/api/platforms" 2>/dev/
 # process belongs to another user. Callers must treat "unknown" as "cannot verify", never as
 # "foreign", or a hardened box would stop reusing its own hub.
 hub_cwd() {
-  local port="$1" pid cwd
+  local port="$1" pid
   pid="$(lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null | head -1)"
   [ -n "$pid" ] || return 1
-  # -Fn prints one field per line prefixed by its type; the cwd row starts with `n`.
-  # Works on macOS and Linux lsof alike. /proc is the fallback when lsof is absent.
+  proc_cwd "$pid"
+}
+
+# proc_cwd <pid> — the working directory of any process, or rc 1 if it cannot be read.
+# -Fn prints one field per line prefixed by its type; the cwd row starts with `n`. Works on
+# macOS and Linux lsof alike. /proc is the fallback when lsof is absent.
+proc_cwd() {
+  local pid="$1" cwd
   cwd="$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
   [ -n "$cwd" ] || cwd="$(readlink "/proc/$pid/cwd" 2>/dev/null)"
   [ -n "$cwd" ] || return 1
   printf '%s\n' "$cwd"
 }
+
+# owned_pids — every process belonging to THIS checkout, newest first.
+#
+# Matched by working directory, not by command line: the hub is launched as
+# `uvicorn api.app:app` with cwd = <repo>/ReelScraper and the repo path never appears in
+# argv, so a pattern match would either miss it or — far worse — match an identically-named
+# process in a different clone. Three checkouts of this repo on one machine is normal, and
+# stopping the wrong one is exactly the failure this project has already been bitten by.
+owned_pids() {
+  local pids pid cwd
+  pids="$(pgrep -f 'uvicorn|cli\.py|scrape\.py|download_media\.py|run\.py|mkdocs|vite' 2>/dev/null)"
+  [ -n "$pids" ] || return 0
+  for pid in $pids; do
+    [ "$pid" = "$$" ] && continue
+    cwd="$(proc_cwd "$pid" 2>/dev/null)" || continue
+    case "$cwd" in
+      "$ROOT"|"$ROOT"/*) printf '%s\n' "$pid" ;;
+    esac
+  done
+}
+
+# data_paths — every path holding generated or scraped working data.
+#
+# ONE list, used by ./clean and by `./init --reset`, because they had drifted: init's
+# reset missed the raw scrape dumps entirely, so a "reset" install still had
+# reels_raw.json on disk and the next scrape skipped every creator already in it.
+#
+# Deliberately EXCLUDES the per-agent .env files. They hold API keys: wiping them would
+# make "start from scratch" mean "re-enter your credentials", and archiving them would put
+# live secrets in a zip.
+data_paths() {
+  cat <<'PATHS'
+ReelScraper/media
+ReelScraper/renders
+ReelScraper/analysis
+ReelScraper/studio/instagram
+ReelScraper/studio/x
+ReelScraper/studio/youtube
+ReelScraper/evals
+ReelScraper/logs
+ReelScraper/producers
+ReelScraper/discovery
+ReelScraper/config/agents
+ReelScraper/config/pipeline_schedule.json
+ReelScraper/memory/instagram/content.db
+ReelScraper/memory/x/content.db
+ReelScraper/memory/youtube/content.db
+ReelScraper/memory/shared/insights.jsonl
+ReelScraper/memory/shared/INSIGHTS.md
+demo-data/data
+PATHS
+  # Per-platform scrape + score output. Globbed rather than listed so a new platform is
+  # covered the day its directory appears.
+  local d
+  for d in "$ROOT"/ReelScraper/platforms/*/; do
+    [ -d "$d" ] || continue
+    local p="ReelScraper/platforms/$(basename "$d")"
+    printf '%s\n' "$p/content.json" "$p/profiles_meta.json"
+    local f
+    for f in "$d"*_raw*.json "$d"*.xlsx "$d"*.csv; do
+      [ -e "$f" ] && printf '%s/%s\n' "$p" "$(basename "$f")"
+    done
+  done
+}
+
+# Same list, de-duplicated. The per-platform globs legitimately re-emit files also named
+# explicitly above them (virality_reels.csv is matched by *.csv), and a duplicate makes
+# ./clean report the same file twice and archive it twice.
+data_paths_unique() { data_paths | awk 'NF && !seen[$0]++'; }
 
 # wait_for_hub <url> [seconds] — poll until it answers
 wait_for_hub() {

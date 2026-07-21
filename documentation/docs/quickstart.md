@@ -73,11 +73,29 @@ flowchart LR
     H -->|approve| I[Post]
 ```
 
-Stages 3–6 are launched as background jobs through the hub's generic pipeline dispatcher, either from the Dashboard's **Producers** view or directly via `curl`. Each call returns a `job_id` you can poll.
+Stages 3–6 are launched as background jobs through the hub's generic pipeline dispatcher, either from the Dashboard's **Board** or directly via `curl`. Each call returns a `job_id` you can poll.
+
+!!! tip "The stages run in order, and the hub enforces it"
+
+    Each stage's output is the next one's input, so calling them out of order returns
+    **409** with the reason (`"Nothing scraped yet — run Scrape first."`) rather than
+    launching a subprocess that fails. `GET /api/platforms` reports the same preconditions
+    up front as `readiness`, which is what greys out a Run button on the Board and offers
+    the stage that unblocks it. Add `?force=true` to override.
+
+    In a hurry: `POST /api/pipeline/{platform}/run-all` (the Board's **Run full pipeline**)
+    chains all four in order and stops at the first failure.
 
 ### 1. Seed a source list
 
-Add creator handles to `platforms/<platform>/pages.txt` by hand, or approve AutoSearch candidates in the Dashboard's **Discover** tab (approving appends the handle automatically — see the [CLI Reference](cli.md) for the discovery routes).
+On the Board, the **Sources** card's *Add pages* button opens the watchlist in Config —
+pin a handle there. You can also edit `platforms/<platform>/pages.txt` directly (one handle
+per line; comments survive Dashboard edits), or approve AutoSearch candidates in the
+**Discover** tab, which appends the handle for you — see the [CLI Reference](cli.md) for
+the discovery routes.
+
+Nothing downstream can run until this list has at least one entry, which is why every
+empty screen in the Dashboard offers a way back to it.
 
 ### 2. Scrape
 

@@ -7,7 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`./stop`** — shuts down the hub and any stage jobs this checkout started. Processes
+  are matched by working directory, not command line, so several clones on one machine
+  never stop each other's hub; it reports a foreign checkout holding the port instead of
+  touching it. `--list` to preview.
+- **`./clean`** — back to a fresh clone. Stops everything, archives every generated path
+  to `backups/cuttingroom-data-<timestamp>.zip`, verifies that archive, prints its path,
+  asks, and only then deletes — data *and* stored keys. A corrupt or unwritable archive
+  aborts before anything is removed. Keys are deliberately not archived. Never removes a
+  git-tracked file, and restores agent-written `memory/*/patterns.md` to the shipped
+  version rather than leaving observations about real analyzed clips behind.
+- **Automatic runs.** Config → Automatic runs repeats `scrape → analyze → media` on a
+  timer (6h/12h/day/3 days/week) per platform. `GET /api/schedule`,
+  `PUT /api/schedule/{platform}`. The hub must be running — there is no daemon outside
+  it — so it is best-effort, and the panel says so. Blueprint generation is opt-in
+  because it calls a paid API once per clip; the timestamp is persisted and stamped
+  before launch, so a long run cannot double-fire and a restart neither re-fires nor
+  loses the schedule.
+- **Stage readiness.** `GET /api/platforms` reports per-stage
+  `{ready, blocked_by, reason}`, and `POST /api/pipeline/{p}/{stage}` returns **409**
+  with that reason instead of launching a subprocess that fails (`?force=true`
+  overrides). The Board greys a blocked Run, states why, and offers the stage that
+  unblocks it.
+- **`watchlist` and `scraped_items`** on `GET /api/platforms`, so the Board can report
+  each stage's own progress instead of the end of the pipeline.
+- An **Add pages** button on the Board's Sources card, and the same affordance from every
+  empty state that traces back to an empty watchlist — self-gating once handles exist.
+- A toast surface. Failed requests now show the hub's own explanation; previously every
+  mutation swallowed its error.
+
 ### Fixed
+- **`Run full pipeline` never ran a pipeline.** `POST /api/pipeline/{p}/run-all` was
+  answered by the `/{platform}/{stage}` catch-all — registered above it, and Starlette
+  matches in registration order — with `400 "stage must be one of [...]"`. With no
+  `onError` anywhere, the click looked inert.
+- **A resumed scrape deleted the creators it skipped.** `save_outputs` rewrites
+  `reels_raw.json` wholesale and the resume logic skips creators already in it, but the
+  accumulator they share was seeded empty. Re-running with nothing to do wrote `{}` over
+  the corpus and still exited 0; adding one handle to five deleted the other four.
+- **Failure reasons were discarded.** The job tail kept `stdout or stderr`, so any stage
+  that printed a progress line lost its stderr — the reason, in exactly the case it was
+  needed. Both streams are kept, stderr last.
+- A stage that crashed outright recorded `rc: None`, which the run-all supervisor read as
+  "unknown stage, skip cleanly" and ran on regardless.
+- `PUT /api/config/{platform}` rewrote `pages.txt` from a `GET` that had already stripped
+  comments, deleting the file's own instructions on a new user's first save.
+- A second `run-all` started a second supervisor over the same files; it is now refused.
+- `x` and `youtube` died on an uncaught `FileNotFoundError` when `pages.txt` was absent,
+  instead of reaching the friendly message `instagram` already had.
+- The header status now carries the failing stage's reason and opens the Floor Log; a
+  halted run records where it stopped and what never ran.
 - A finished scrape that had not been analyzed yet was reported as if it had found
   nothing. `scrape` writes `<content>_raw*.json`; only `analyze` turns that into the
   `content.json` every corpus view reads — so with 250 reels sitting on disk,
@@ -20,6 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer walks you back to re-scraping reels you already have.
 
 ### Changed
+- **`./init --reset` now clears stored API keys and keeps your data.** It used to delete
+  generated data — so re-running setup after rotating a key threw away a scrape that cost
+  twenty minutes and real Instagram traffic. Wiping data is `./clean`, which archives it
+  first. The reset also covers `platforms/x/session.txt`, which it previously missed.
 - The "Building the dashboard…" page now links to the published documentation site
   instead of the hub's own `/docs` Swagger UI. Swagger answers "what endpoints
   exist", which is not the question someone waiting on a first build is asking, and

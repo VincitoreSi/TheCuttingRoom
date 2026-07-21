@@ -44,13 +44,15 @@ Sources ─▶ Scrape ─▶ Analyze(score) ─▶ Media ─▶ AnalysisEngine(b
 ## Quick start
 
 You need **Python ≥ 3.10** with [uv](https://docs.astral.sh/uv/), and **Node ≥ 20**
-for the Dashboard. Three scripts at the repo root are the whole interface:
+for the Dashboard. A handful of scripts at the repo root are the whole interface:
 
 ```bash
-./demo     # a populated studio to look around in — no keys, no scraping, instant
-./init     # a clean first run: checks, installs, verifies your Gemini key, launches
-./docsite     # build + serve the documentation site with live reload
-./health   # run every test suite, build, and repository invariant
+./demo      # a populated studio to look around in — no keys, no scraping, instant
+./init      # a clean first run: checks, installs, verifies your Gemini key, launches
+./stop      # shut down everything this checkout started
+./clean     # archive all data to a zip, then wipe back to a fresh clone
+./docsite   # build + serve the documentation site with live reload
+./health    # run every test suite, build, and repository invariant
 ```
 
 Each checks its prerequisites, installs what's missing, picks a free port if 8787 is
@@ -75,19 +77,31 @@ python3 scripts/check-keys.py          # read-only: authenticates, spends nothin
 
 From there:
 
+1. **Add a creator.** On the Board, the **Sources** card's *Add pages* button opens the
+   watchlist; pin an Instagram handle. (Or edit
+   `ReelScraper/platforms/instagram/pages.txt` directly — one handle per line.)
+2. **Press *Run full pipeline*.** It runs scrape → analyze → media → blueprints in order
+   and stops if one fails. Each card shows its own count as its stage completes, and a
+   stage whose input is not ready is greyed out with the reason and a button for the stage
+   that unblocks it.
+3. **Draft from the corpus** — approve what you like in the Studio.
+
+The same thing without the browser:
+
 ```bash
-# 1. add creator handles, one per line
-$EDITOR ReelScraper/platforms/instagram/pages.txt
-
-# 2. run scrape → analyze → media → blueprints from the Board, or:
-cd ReelScraper && uv run cli.py scrape instagram
-
-# 3. turn the top clips into clone recipes
+cd ReelScraper && uv run cli.py scrape instagram    # then: analyze, media
 cd SimilarContent && uv run cli.py propose --platform instagram --dry-run
 ```
 
-Add `--reset` to `./init` to wipe generated data first, `--port N` to pin a port, and
-`--no-launch` to set up without starting anything.
+Config → **Automatic runs** repeats scrape → analyze → media on a timer (daily, weekly, …)
+for as long as the hub is running. Blueprint generation is opt-in there because it spends
+API credits on every run.
+
+`--port N` pins a port and `--no-launch` sets up without starting anything. When you're
+done: `./stop` shuts down everything this checkout started (and nothing belonging to
+another clone). `./init --reset` clears stored API keys but keeps your corpus; `./clean`
+goes all the way back to a fresh clone — archiving every scrap of data to a verified
+`backups/*.zip` and telling you where it is *before* it deletes anything.
 
 **`./health` is the one command to trust before you commit.** It runs all four Python test
 suites, the Dashboard's typecheck / lint / unit tests / production build, the docs build, and a

@@ -15,6 +15,8 @@ them assume a previous step was run. Shared shell helpers live in
 | **Start for real** | `./init` | A clean, empty install ready to scrape your own niche | Gemini key (promptable, skippable) |
 | **Read the docs** | `./docsite` | This site, built and served with live reload | No |
 | **Check it works** | `./health` | Every test suite, build and repo invariant, with a non-zero exit on failure | No |
+| **Stop it** | `./stop` | Every process this checkout started, shut down | No |
+| **Start over** | `./clean` | Data archived to a zip, then wiped back to a fresh clone | No |
 
 ---
 
@@ -176,3 +178,51 @@ because they are properties of the *repository* rather than of any function:
 
 `./health` asserts each of those directly. If you add a similar structural guarantee,
 add the assertion here too — that is what the section is for.
+
+
+## `./stop` — shut this checkout down
+
+```bash
+./stop            # stop the hub and any stage jobs it started
+./stop --list     # show what would be stopped, stop nothing
+```
+
+Processes are matched by **working directory**, not by command line. The hub runs as
+`uvicorn api.app:app` with cwd `<repo>/ReelScraper` and the repo path never appears in its
+arguments — so a name match would either miss it or, worse, kill an identically-named
+process belonging to a different clone. Several checkouts of this repo on one machine is
+normal, and a hub from the wrong one answering on `:8787` is a genuinely confusing way to
+lose an afternoon, so `./stop` also tells you when the port is held by a checkout that is
+not this one, without touching it.
+
+Nothing on disk changes.
+
+## `./clean` — back to a fresh clone
+
+```bash
+./clean               # archive, confirm, then delete data AND keys
+./clean --keep-keys   # wipe data only
+./clean --list        # show what would go, do nothing
+./clean --yes         # skip the prompt (the archive is still written first)
+```
+
+The order matters, and it is the whole point of the script:
+
+1. Stop everything.
+2. Archive every generated path to `backups/cuttingroom-data-<timestamp>.zip`.
+3. **Verify** the archive — a corrupt or empty one aborts with nothing deleted.
+4. Print where it is, then ask.
+5. Delete.
+
+Restore any time with `unzip -o backups/<archive>.zip -d .`
+
+!!! warning "API keys are deleted and are NOT in the archive"
+
+    Live credentials do not belong in a zip file somebody will forget about, so they are
+    removed without a copy. Re-enter them with `./init`, or keep them with `--keep-keys`.
+    For the credentials alone — keys cleared, scraped data kept — use `./init --reset`.
+
+Two things it will never do: remove a file git tracks, and leave agent-written memory
+behind. `memory/*/patterns.md` ships as curated scaffolding but accumulates observations
+about real analyzed clips during a run, so it is restored to the shipped version rather
+than deleted or kept.

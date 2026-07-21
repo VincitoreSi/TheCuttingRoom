@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+#
+# ./clean — archive everything, then wipe back to a fresh clone.
+#
+#   ./clean               stop, archive the data, then delete data AND keys
+#   ./clean --keep-keys   leave the API keys in place, wipe data only
+#   ./clean --yes         don't ask (the archive is still written first)
+#   ./clean --list        show what would be archived and deleted, do nothing
+#
+# The archive is written and VERIFIED before anything is deleted, and its path is printed
+# before you are asked to confirm. If the archive cannot be written, nothing is deleted.
+#
+# Two things are deliberately NOT in the archive:
+#   - API keys. Live credentials do not belong in a zip somebody will forget about. They
+#     are deleted (unless --keep-keys) and cannot be recovered from the backup — rotate or
+#     re-enter them.
+#   - Anything git tracks. This only ever removes generated data, never source.
+#
+# For a gentler option: `./init --reset` scrubs the credentials and leaves the data alone.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/_common.sh
+. "$ROOT/scripts/_common.sh"
+
+ASSUME_YES=0; KEEP_KEYS=0; LIST=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --yes|-y)    ASSUME_YES=1 ;;
+    --keep-keys) KEEP_KEYS=1 ;;
+    --list)      LIST=1 ;;
+    -h|--help)   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)           die "unknown option: $1 (try --help)" ;;
+  esac
+  shift
+done
+
+printf '\n  %sThe Cutting Room%s · clean\n' "$_B" "$_R"
+
+# ---------------------------------------------------------------- 1. what is there
+step "Taking stock"
+
+present=()
+while IFS= read -r rel; do
+  [ -n "$rel" ] || continue
+  [ -e "$ROOT/$rel" ] || continue
+  # Never delete something git tracks — the backstop that makes "only generated data"
+  # a guarantee rather than an intention. A FILE that is tracked is skipped outright; a
+  # DIRECTORY that merely contains one is kept and emptied around it, since
+  # `git ls-files` matches a directory when anything beneath it is tracked and
+  # demo-data/data (real scraped content) holds a tracked .gitkeep.
+  if [ -f "$ROOT/$rel" ] && git -C "$ROOT" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+    warn "skipping tracked file $rel"
+    continue
+  fi
+  present+=("$rel")
+done < <(data_paths_unique)
+
+keys=()
+if [ "$KEEP_KEYS" -eq 0 ]; then
+  for k in AnalysisEngine/.env SimilarContent/.env AutoSearch/.env ReelScraper/.env \
+           ReelScraper/platforms/x/session.txt; do
+    [ -e "$ROOT/$k" ] && keys+=("$k")
+  done
+fi
+
+if [ ${#present[@]} -eq 0 ] && [ ${#keys[@]} -eq 0 ]; then
+  ok "already clean — nothing to archive or delete"
+  printf '\n'
+  exit 0
+fi
+
+total=0
+for rel in "${present[@]:-}"; do
+  [ -n "$rel" ] || continue
+  sz="$(du -sk "$ROOT/$rel" 2>/dev/null | cut -f1)"; total=$((total + ${sz:-0}))
+  printf '    %-52s %s\n' "$rel" "${_D}$(du -sh "$ROOT/$rel" 2>/dev/null | cut -f1)${_R}"
+done
+[ ${#present[@]} -eq 0 ] && say "${_D}no generated data on disk${_R}"
+
+if [ ${#keys[@]} -gt 0 ]; then
+  printf '\n'
+  warn "credentials that will be DELETED and are NOT archived:"
+  for k in "${keys[@]}"; do say "${_D}$k${_R}"; done
+fi
+
+if [ "$LIST" -eq 1 ]; then
+  printf '\n    %s--list: nothing was archived or deleted%s\n\n' "$_D" "$_R"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- 2. stop first
+step "Stopping anything still running"
+"$ROOT/stop" >/dev/null 2>&1 || true
+ok "processes stopped"
+
+# ---------------------------------------------------------------- 3. archive
+ARCHIVE=""
+if [ ${#present[@]} -gt 0 ]; then
+  step "Archiving ${total} KB before deleting anything"
+  have zip || die "zip is not installed — refusing to delete data I cannot archive first
+    (install zip, or re-run with --list to see what would go)"
+
+  mkdir -p "$ROOT/backups"
+  ARCHIVE="$ROOT/backups/cuttingroom-data-$(date +%Y%m%d-%H%M%S).zip"
+  ( cd "$ROOT" && zip -q -r "$ARCHIVE" "${present[@]}" ) \
+    || die "archive failed — nothing has been deleted"
+
+  # An archive nobody checked is not a backup. Verify the container AND that it actually
+  # has entries in it before anything is removed.
+  zip -T "$ARCHIVE" >/dev/null 2>&1 || die "archive is corrupt — nothing has been deleted"
+  entries="$(unzip -Z1 "$ARCHIVE" 2>/dev/null | wc -l | tr -d ' ')"
+  [ "${entries:-0}" -gt 0 ] || die "archive is empty — nothing has been deleted"
+
+  ok "$entries entries · $(du -h "$ARCHIVE" | cut -f1)"
+  printf '\n    %sYour data is here:%s\n    %s%s%s\n' "$_B" "$_R" "$_G" "$ARCHIVE" "$_R"
+  printf '    %sRestore with:  unzip -o "%s" -d "%s"%s\n' "$_D" "$ARCHIVE" "$ROOT" "$_R"
+fi
+
+# ---------------------------------------------------------------- 4. confirm
+if [ "$ASSUME_YES" -eq 0 ]; then
+  printf '\n'
+  if [ -t 0 ]; then
+    printf '    %sDelete all of the above%s' "$_Y" "$_R"
+    [ ${#keys[@]} -gt 0 ] && printf '%s, including the credentials%s' "$_Y" "$_R"
+    printf '%s? [y/N]%s ' "$_Y" "$_R"
+    read -r ans
+    case "$ans" in [yY]*) ;; *) warn "kept — nothing deleted"; printf '\n'; exit 0 ;; esac
+  else
+    die "not a terminal — re-run with --yes if you really mean it
+    (the archive above was still written, so nothing is lost either way)"
+  fi
+fi
+
+# ---------------------------------------------------------------- 5. wipe
+step "Deleting"
+for rel in "${present[@]:-}"; do
+  [ -n "$rel" ] || continue
+  if [ -d "$ROOT/$rel" ] && git -C "$ROOT" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+    # Holds tracked files (demo-data/data/.gitkeep). Remove everything git does not know
+    # about and leave the rest, so a fresh-clone file is never destroyed.
+    while IFS= read -r f; do
+      rf="${f#"$ROOT"/}"
+      git -C "$ROOT" ls-files --error-unmatch "$rf" >/dev/null 2>&1 || rm -f "$f"
+    done < <(find "$ROOT/$rel" -type f)
+    find "$ROOT/$rel" -type d -empty -delete 2>/dev/null || true
+  else
+    rm -rf "${ROOT:?}/$rel"
+  fi
+done
+[ ${#present[@]} -gt 0 ] && ok "${#present[@]} path(s) removed"
+
+for k in "${keys[@]:-}"; do
+  [ -n "$k" ] || continue
+  rm -f "${ROOT:?}/$k"
+done
+[ ${#keys[@]} -gt 0 ] && ok "${#keys[@]} credential file(s) removed"
+
+# Agent memory is TRACKED but agent-WRITTEN: a run appends distilled findings to
+# memory/*/patterns.md, so after real work those files hold observations about real
+# analyzed reels. Deleting them is wrong (they ship as curated scaffolding), leaving them
+# is wrong (that is not a fresh clone, and it is exactly the leak that had to be scrubbed
+# by hand before this repo was first published). Restore them to what the clone shipped.
+if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  dirty="$(git -C "$ROOT" diff --name-only -- '*/memory/*' 2>/dev/null || true)"
+  if [ -n "$dirty" ]; then
+    n="$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')"
+    git -C "$ROOT" checkout -- '*/memory/*' 2>/dev/null || true
+    ok "$n agent-memory file(s) restored to the shipped version"
+  fi
+fi
+
+step "Back to a fresh clone"
+[ -n "$ARCHIVE" ] && printf '    %sArchive:%s %s\n' "$_B" "$_R" "$ARCHIVE"
+if [ ${#keys[@]} -gt 0 ]; then
+  say "${_D}Keys were not archived. ./init will prompt for them again.${_R}"
+fi
+printf '    %sStart over with ./init%s\n\n' "$_D" "$_R"

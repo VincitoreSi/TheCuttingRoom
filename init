@@ -4,7 +4,7 @@
 #
 #   ./init                 check, install, configure, launch
 #   ./init --no-launch     set everything up but don't start the hub
-#   ./init --reset         wipe any existing generated data first (asks before deleting)
+#   ./init --reset         clear stored API keys first (data is kept — see ./clean)
 #   ./init --port 9000     prefer a specific port
 #
 # You end up on an empty dashboard: no corpus, no proposals, no renders. That is the
@@ -40,41 +40,53 @@ require curl   "readiness checks"
 optional git    "niche scaffolding and identity scripts"
 optional ffmpeg "video rendering will not work (SimilarContent stitches reels with it)" "brew install ffmpeg"
 
-# ---------------------------------------------------------------- 2. clean slate
-GENERATED=(
-  "ReelScraper/platforms/instagram/content.json"
-  "ReelScraper/media" "ReelScraper/renders" "ReelScraper/analysis"
-  "ReelScraper/studio/instagram" "ReelScraper/evals" "ReelScraper/logs"
-  "ReelScraper/producers" "ReelScraper/discovery" "ReelScraper/config/agents"
+# ---------------------------------------------------------------- 2. credentials reset
+# --reset scrubs the API keys and leaves the corpus alone. Re-running ./init on a working
+# install is normally about re-doing setup — a rotated key, a fresh clone of the config —
+# not about throwing away a scrape that took twenty minutes and real Instagram traffic to
+# collect. Wiping DATA is ./clean, which archives it first.
+CREDENTIALS=(
+  "AnalysisEngine/.env" "SimilarContent/.env" "AutoSearch/.env" "ReelScraper/.env"
+  "ReelScraper/platforms/x/session.txt"
 )
-existing=()
-for p in "${GENERATED[@]}"; do
-  [ -e "$ROOT/$p" ] && [ -n "$(ls -A "$ROOT/$p" 2>/dev/null || echo x)" ] && existing+=("$p")
-done
-
-if [ ${#existing[@]} -gt 0 ]; then
-  step "Existing data found"
-  for p in "${existing[@]}"; do
-    printf '    %-46s %s\n' "$p" "$(du -sh "$ROOT/$p" 2>/dev/null | cut -f1)"
-  done
-  if [ "$RESET" -eq 1 ]; then
-    printf '\n'
-    warn "scraped media is NOT recoverable — re-downloading it means re-scraping."
-    say  "${_D}./demo restores only the curated subset in demo-data/, not everything above.${_R}"
+if [ "$RESET" -eq 1 ]; then
+  step "Resetting credentials"
+  found=()
+  for p in "${CREDENTIALS[@]}"; do [ -e "$ROOT/$p" ] && found+=("$p"); done
+  if [ ${#found[@]} -eq 0 ]; then
+    ok "no credential files to clear"
+  else
+    for p in "${found[@]}"; do printf '    %s\n' "$p"; done
+    say "${_D}Keys are not recoverable once removed — you will be asked for them below.${_R}"
+    ans=y
     if [ -t 0 ]; then
-      printf '\n    %sDelete all of it and start empty? [y/N]%s ' "$_Y" "$_R"; read -r ans
+      printf '\n    %sClear these? Scraped data is NOT touched. [y/N]%s ' "$_Y" "$_R"; read -r ans
     else
-      # --reset is itself the opt-in, but say plainly what is about to happen.
-      warn "non-interactive --reset: deleting without a prompt"
-      ans=y
+      warn "non-interactive --reset: clearing without a prompt"
     fi
     case "$ans" in
-      [yY]*) for p in "${existing[@]}"; do rm -rf "${ROOT:?}/$p"; done; ok "reset to empty" ;;
-      *)     warn "kept — nothing deleted" ;;
+      [yY]*) for p in "${found[@]}"; do rm -f "${ROOT:?}/$p"; done
+             ok "${#found[@]} credential file(s) cleared" ;;
+      *)     warn "kept — nothing cleared" ;;
     esac
-  else
-    warn "left in place. Re-run with --reset to start genuinely empty."
   fi
+  say "${_D}To delete the scraped data too (archived first): ./clean${_R}"
+fi
+
+# Report what is on disk either way, so a re-run is never a surprise.
+existing=()
+while IFS= read -r p; do
+  [ -n "$p" ] && [ -e "$ROOT/$p" ] && existing+=("$p")
+done < <(data_paths)
+if [ ${#existing[@]} -gt 0 ]; then
+  step "Existing data (kept)"
+  shown=0
+  for p in "${existing[@]}"; do
+    [ "$shown" -ge 8 ] && { say "${_D}… and $(( ${#existing[@]} - 8 )) more${_R}"; break; }
+    printf '    %-46s %s\n' "$p" "$(du -sh "$ROOT/$p" 2>/dev/null | cut -f1)"
+    shown=$((shown + 1))
+  done
+  say "${_D}./clean archives all of it to a zip, then wipes back to a fresh clone.${_R}"
 fi
 
 # ---------------------------------------------------------------- 3. dependencies
