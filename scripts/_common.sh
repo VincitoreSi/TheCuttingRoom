@@ -178,6 +178,43 @@ owned_pids() {
   done
 }
 
+# ---------------------------------------------------------------- git, honestly
+# git_state — can git answer questions about this tree? Echoes exactly one word:
+#
+#   ok       a readable work tree
+#   none     no .git here at all — a downloaded archive or an extracted tarball, which is a
+#            supported way to run this project and must not be treated as an error
+#   broken   .git IS here and git still could not read it
+#
+# The three-way split is the whole point, and `broken` is why this function exists. Git
+# exits 128 — indistinguishable from a plain "no" to every `if git … 2>/dev/null` — for
+# "detected dubious ownership in repository at …", which is what git says about a checkout
+# owned by a different uid than the one running it. That is the normal state of a bind
+# mount inside a container, and it is not rare: it is what you get the first time you run
+# any of this from a container against the host's clone.
+#
+# Two callers used to collapse `broken` into `none`, with real consequences:
+#   • ./clean read "git failed" as "git does not track this" and archived and DELETED
+#     tracked files, including the .gitkeep whose entire purpose is to survive ./clean.
+#   • ./health turned four invariants into skips and still printed HEALTHY.
+# Both now fail closed. `none` still skips, because a tarball genuinely has no answer.
+git_state() {
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf 'ok\n'
+  elif [ -e "$ROOT/.git" ]; then
+    printf 'broken\n'
+  else
+    printf 'none\n'
+  fi
+}
+
+# git_why — the first line of whatever git actually said, for the message a human reads.
+git_why() {
+  local msg
+  msg="$(git -C "$ROOT" rev-parse --is-inside-work-tree 2>&1 | head -1)"
+  printf '%s\n' "${msg:-git is not on PATH}"
+}
+
 # data_paths — every path holding generated or scraped working data.
 #
 # ONE list, used by ./clean and by `./init --reset`, because they had drifted: init's
@@ -411,7 +448,18 @@ prompt_secret() {
 # counter would just emit thousands of junk lines.
 spun() {
   local label="$1"; shift
-  local log; log="$(mktemp -t vp-setup)"
+  # The X's are load-bearing. BSD/macOS `mktemp -t` takes a bare PREFIX and appends its own
+  # randomness, so `-t vp-setup` works here and has always worked here. GNU coreutils treats
+  # the argument as a TEMPLATE and refuses one with fewer than three trailing X's:
+  # `mktemp: too few X's in template 'vp-setup'` (verified, coreutils 9.1). This form is the
+  # one both accept.
+  #
+  # It failed quietly rather than loudly, which is why it survived: spun is always the left
+  # operand of a `||` list, so bash suspends errexit for its whole body. $log ended up empty,
+  # `>""` failed, spun returned 1, and sync_python_projects folded four real sync failures
+  # into `warn "see: cd $p && uv sync"` before the run finally died in build_dashboard —
+  # blaming npm for a broken mktemp.
+  local log; log="$(mktemp -t vp-setup.XXXXXX)" || die "could not create a temp file for '$label'"
   if [ ! -t 1 ]; then
     printf '    %s… ' "$label"
     if "$@" >"$log" 2>&1; then printf 'done\n'; rm -f "$log"; return 0; fi

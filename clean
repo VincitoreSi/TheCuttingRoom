@@ -37,6 +37,45 @@ done
 
 printf '\n  %sThe Cutting Room%s · clean\n' "$_B" "$_R"
 
+# ---------------------------------------------------------------- 0. can git answer?
+# "Never delete something git tracks" is this script's one hard guarantee, and it is only
+# as good as git's ability to answer. Establish that ONCE, up front, before an archive is
+# written or a single path is listed — not per-call, where a mid-run failure would leave
+# half a wipe behind.
+#
+# `git ls-files --error-unmatch` exits 1 for "not tracked" and 128 for "I could not tell
+# you", and `if git … 2>/dev/null` reads both as "not tracked". Under 128 — a bind mount
+# owned by another uid, which git reports as "detected dubious ownership" — every tracked
+# file read as untracked, got archived, and was then DELETED, taking demo-data/data/.gitkeep
+# with it. Reproduced end to end before this guard existed.
+GIT_OK=0
+case "$(git_state)" in
+  ok)     GIT_OK=1 ;;
+  broken) die "git cannot read this checkout, so I cannot tell tracked files from generated
+    ones — and this script deletes things. Nothing has been touched.
+
+    git said: $(git_why)
+
+    If this is a container or a bind mount owned by another user:
+      git config --global --add safe.directory '$ROOT'" ;;
+  none)   warn "no .git here — treating everything below as generated data" ;;
+esac
+
+# is_tracked <relpath> — 0 tracked, 1 not tracked. Never lies by returning 1 on an error.
+is_tracked() {
+  [ "$GIT_OK" -eq 1 ] || return 1
+  local out rc
+  out="$(git -C "$ROOT" ls-files --error-unmatch -- "$1" 2>&1)"; rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) return 1 ;;                       # genuinely not tracked
+    *) die "git stopped answering partway through (exit $rc) on '$1':
+    $out
+
+    Some data may already have been deleted; the archive named above still holds it." ;;
+  esac
+}
+
 # ---------------------------------------------------------------- 1. what is there
 step "Taking stock"
 
@@ -49,7 +88,7 @@ while IFS= read -r rel; do
   # DIRECTORY that merely contains one is kept and emptied around it, since
   # `git ls-files` matches a directory when anything beneath it is tracked and
   # demo-data/data (real scraped content) holds a tracked .gitkeep.
-  if [ -f "$ROOT/$rel" ] && git -C "$ROOT" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+  if [ -f "$ROOT/$rel" ] && is_tracked "$rel"; then
     warn "skipping tracked file $rel"
     continue
   fi
@@ -136,12 +175,12 @@ fi
 step "Deleting"
 for rel in "${present[@]:-}"; do
   [ -n "$rel" ] || continue
-  if [ -d "$ROOT/$rel" ] && git -C "$ROOT" ls-files --error-unmatch "$rel" >/dev/null 2>&1; then
+  if [ -d "$ROOT/$rel" ] && is_tracked "$rel"; then
     # Holds tracked files (demo-data/data/.gitkeep). Remove everything git does not know
     # about and leave the rest, so a fresh-clone file is never destroyed.
     while IFS= read -r f; do
       rf="${f#"$ROOT"/}"
-      git -C "$ROOT" ls-files --error-unmatch "$rf" >/dev/null 2>&1 || rm -f "$f"
+      is_tracked "$rf" || rm -f "$f"
     done < <(find "$ROOT/$rel" -type f)
     find "$ROOT/$rel" -type d -empty -delete 2>/dev/null || true
   else
@@ -161,7 +200,7 @@ done
 # analyzed reels. Deleting them is wrong (they ship as curated scaffolding), leaving them
 # is wrong (that is not a fresh clone, and it is exactly the leak that had to be scrubbed
 # by hand before this repo was first published). Restore them to what the clone shipped.
-if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+if [ "$GIT_OK" -eq 1 ]; then
   dirty="$(git -C "$ROOT" diff --name-only -- '*/memory/*' 2>/dev/null || true)"
   if [ -n "$dirty" ]; then
     n="$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')"

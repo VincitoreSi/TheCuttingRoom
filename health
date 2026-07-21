@@ -143,9 +143,21 @@ step "Repository invariants"
 # Several of these read git. A copy of the tree without a .git directory (a downloaded
 # archive, a tarball, this script's own clean-room tests) is a legitimate way to run the
 # project, so those checks SKIP rather than reporting a false failure.
+#
+# "No .git" and "git could not read the .git that is right there" are NOT the same thing,
+# and the earlier `git rev-parse … 2>/dev/null` could not tell them apart. Git exits 128
+# with "detected dubious ownership" for a checkout owned by a different uid — the normal
+# state of a bind mount inside a container — so the gate quietly downgraded four invariants
+# (including the secret scan and the working-data ignore check) to skips and still printed
+# HEALTHY. A green run that checked less than it claimed is the exact failure mode this
+# section exists to prevent, so a broken .git is now a FAILURE. See git_state in
+# scripts/_common.sh.
 IS_GIT=0
-( cd "$ROOT" && git rev-parse --is-inside-work-tree >/dev/null 2>&1 ) && IS_GIT=1
-[ "$IS_GIT" -eq 1 ] || say "${_D}(not a git work tree — git-based invariants will skip)${_R}"
+case "$(git_state)" in
+  ok)     IS_GIT=1 ;;
+  broken) record "git readable" fail "$(git_why)" ;;
+  none)   say "${_D}(not a git work tree — git-based invariants will skip)${_R}" ;;
+esac
 
 # (a) no credentials on disk or in history
 envs="$(find "$ROOT" -name '.env' -not -path '*/node_modules/*' -not -path '*/.venv/*' 2>/dev/null | wc -l | tr -d ' ')"
@@ -202,21 +214,48 @@ if [ "$IS_GIT" -eq 1 ]; then
   # Every entry names a FILE, never a bare directory. A directory-only rule (`logs/`) cannot
   # match a path that does not exist on disk, because git has no way to know the path was
   # meant to be a directory — `ReelScraper/logs` reports committable while
-  # `ReelScraper/logs/agents.jsonl` correctly reports ignored.
+  # `ReelScraper/logs/agents.jsonl` correctly reports ignored. `ReelScraper/renders` is the
+  # trap: it answers "ignored" today only because the directory happens to exist on this
+  # machine, and would flip to "committable" on a fresh clone. The file forms below hold
+  # either way, which is the whole point of checking against PATHS rather than against disk.
+  #
+  # The list must cover data_paths() in scripts/_common.sh — that is the definition of
+  # "working data" everywhere else in this repo, and an entry there with no entry here is a
+  # path ./clean will wipe and `git add -A` would publish. The two drifted once already.
   bad=0; checked=0; missed=""
-  for p in "ReelScraper/media/instagram/1.jpg" "ReelScraper/logs/agents.jsonl" "links.txt" \
+  for p in "ReelScraper/media/instagram/1.jpg" "ReelScraper/media/x/1.jpg" \
+           "ReelScraper/logs/agents.jsonl" "links.txt" \
            "ReelScraper/platforms/instagram/pages.txt" \
            "ReelScraper/platforms/instagram/content.json" \
+           "ReelScraper/platforms/instagram/profiles_meta.json" \
            "ReelScraper/platforms/instagram/virality_reels.csv" \
            "ReelScraper/platforms/instagram/reels_raw.json" \
+           "ReelScraper/platforms/instagram/Reels_Data.xlsx" \
            "ReelScraper/platforms/instagram/Virality_Analysis.xlsx" \
+           "ReelScraper/platforms/x/content.json" \
+           "ReelScraper/platforms/x/profiles_meta.json" \
+           "ReelScraper/platforms/youtube/content.json" \
+           "ReelScraper/platforms/youtube/profiles_meta.json" \
            "ReelScraper/memory/shared/insights.jsonl" \
+           "ReelScraper/memory/shared/INSIGHTS.md" \
+           "ReelScraper/memory/instagram/content.db" \
+           "ReelScraper/memory/x/content.db" \
+           "ReelScraper/memory/youtube/content.db" \
            "ReelScraper/renders/instagram/abc123/reel.mp4" \
+           "ReelScraper/renders/instagram/abc123/poster.jpg" \
            "ReelScraper/renders/index.json" \
+           "ReelScraper/analysis/instagram/summary.json" \
+           "ReelScraper/evals/instagram/run.json" \
+           "ReelScraper/producers/registry.json" \
+           "ReelScraper/discovery/instagram/candidates.json" \
+           "ReelScraper/discovery/instagram/gate.jsonl" \
            "ReelScraper/studio/instagram/x.md" \
+           "ReelScraper/studio/x/x.md" \
+           "ReelScraper/studio/youtube/x.md" \
            "ReelScraper/config/agents/auto-search.json" \
            "ReelScraper/config/pipeline_schedule.json" \
            "demo-data/manifest.json" \
+           "demo-data/data/instagram/reel.mp4" \
            "demodataset.zip"; do
     checked=$((checked+1))
     ( cd "$ROOT" && git check-ignore -q "$p" ) || { bad=$((bad+1)); missed="$missed $p"; }

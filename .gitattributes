@@ -1,0 +1,48 @@
+# .gitattributes — line endings, decided here rather than by whoever cloned the repo.
+#
+# Everything in this project that starts a process is a bash script with a `#!` on line 1:
+# the six root entry points, scripts/*.sh, and the container launcher. A shebang followed by
+# a carriage return is not a shebang — the kernel looks for an interpreter literally named
+# "/usr/bin/env bash\r" and reports "no such file or directory", naming neither the file it
+# could not run nor the reason. That is the single most expensive way to spend an afternoon
+# available in this repo.
+#
+# It is not hypothetical: `git config core.autocrlf true` is a common Windows default, WSL2's
+# git inherits it from a Windows-side global config, and the supported Windows layout (a clone
+# inside the WSL2 filesystem) still runs these scripts under Linux. Without this file that
+# combination produces CRLF working-tree copies of every entry point.
+#
+# `text=auto` lets git decide what is text; `eol=lf` says that anything it decides IS text
+# gets LF in the working tree on every platform, autocrlf or not. Binary files are detected
+# and left alone — the explicit `-text` block below is belt-and-braces for the formats where
+# a wrong guess would corrupt real content.
+
+*               text=auto eol=lf
+
+# ---------------------------------------------------------------- executables
+# Covered by the blanket rule above. Listed explicitly because these are the files where the
+# failure is silent and unattributable, and because an explicit line survives someone
+# loosening the blanket rule later.
+init            text eol=lf
+demo            text eol=lf
+stop            text eol=lf
+clean           text eol=lf
+health          text eol=lf
+docsite         text eol=lf
+scripts/*.sh    text eol=lf
+
+# The container lane, for when it lands: `cr` is the only thing a Windows user runs, and
+# docker/entrypoint.sh is baked in as the image ENTRYPOINT, where a CRLF copy reproduces the
+# same unfindable error from *inside* the container. Inert until those files exist.
+cr              text eol=lf
+docker/*.sh     text eol=lf
+
+# ---------------------------------------------------------------- never touch these
+*.png           -text
+*.ico           -text
+*.jpg           -text
+*.jpeg          -text
+*.mp4           -text
+*.zip           -text
+*.db            -text
+*.xlsx          -text
