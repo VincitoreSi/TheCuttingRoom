@@ -1,0 +1,210 @@
+# .dockerignore — the build context filter for docker/Dockerfile.
+#
+# THIS FILE MUST LIVE AT THE REPO ROOT. docker/docker-compose.yml sets `context: ..`, and
+# BuildKit reads <context>/.dockerignore. A copy placed next to the Dockerfile in docker/ is
+# SILENTLY IGNORED — no warning, no error — and the first `COPY ReelScraper/ ./ReelScraper/`
+# then bakes real creator video, reels_raw.json, every .env and platforms/x/session.txt into
+# an immutable layer. `./cr build` asserts this file exists and that its first non-comment
+# line is `**`, which is the cheap guard against someone "simplifying" it into a denylist.
+#
+# DENY EVERYTHING, THEN ALLOW. Not a denylist. The reason is checkable, not stylistic:
+# ReelScraper/renders/, ReelScraper/studio/<platform>/, ReelScraper/evals/ and
+# ReelScraper/discovery/ DO NOT EXIST on a fresh clone — the hub creates them the first time
+# someone runs the pipeline. A denylist written today against the current tree omits them by
+# inspection and starts leaking scraped data into image layers the moment a contributor
+# builds after running ./demo. Deny-all-then-allow fails closed: a directory nobody has
+# thought about yet is excluded until someone adds it here on purpose.
+#
+# WHY THIS MATTERS MORE THAN USUAL HERE
+#   Working tree today: ~546 MB.   `git ls-files`: ~320 files, ~3.4 MB.
+#   A naive `COPY . .` would bake into an immutable layer:
+#     ReelScraper/media/                     real Instagram video (mp4 + jpg per item)
+#     platforms/instagram/reels_raw.json     scraped third-party content
+#     AutoSearch/.env                        ANTHROPIC_API_KEY, IG_SESSIONID, IG_CSRFTOKEN
+#     AnalysisEngine/.env, SimilarContent/.env   GEMINI_API_KEY
+#     ReelScraper/platforms/x/session.txt    live X auth_token + ct0
+#     .git/                                  the whole history, incl. any .env ever committed
+#   Deleting them in a later RUN does not remove them from the image.
+#
+# THESE ARE TWO FILTERS FOR TWO LANES, NOT A BELT AND BRACES. MEASURED 2026-07-22:
+#
+#   lane                                          the filter actually doing the work
+#   --------------------------------------------  ------------------------------------------
+#   git archive HEAD | docker build -  (release)  git archive.  THIS FILE IS NOT APPLIED.
+#   docker compose build / context: .. (./cr)     THIS FILE. It is the ONLY filter.
+#
+#   BuildKit reports `[internal] load remote build context` -> `copy /context /` for a tar
+#   stream and applies no ignore rules to it: a probe image built from `git archive HEAD |
+#   docker build -` contains `.pre-commit-config.yaml` and `.github/`, both denied below.
+#   That lane is safe because the git export carries none of the forbidden classes — not
+#   because of this file. Conversely a probe built with the context set to the real 561 MB
+#   working tree (five real .env files, .git, ReelScraper/media/, platforms/x/session.txt)
+#   came out at 305 files with none of it. Neither lane is covered twice, so DO NOT weaken
+#   either one on the assumption that the other backstops it.
+#
+#   Release images are still built from a clean git export, never from a working tree:
+#       git archive HEAD | docker build -f docker/Dockerfile -t cuttingroom:<tag> -
+#   because .dockerignore cannot express "the COMMITTED version of this tracked file", and
+#   ReelScraper/memory/<platform>/patterns.md and MEMORY.md are git-tracked AND agent-mutated
+#   — `clean` restores them from git precisely because after real work they hold observations
+#   about real analyzed reels. A build from a working checkout bakes the mutated versions.
+#   Those two files are deliberately NOT excluded below: the agents read them, and the git
+#   export is what makes their content safe.
+
+# ---- deny everything --------------------------------------------------------------------
+**
+
+# ---- allow the four uv projects and the shared trees ------------------------------------
+# Both forms per tree: `!X` keeps the directory walkable, `!X/**` keeps its contents.
+!ReelScraper
+!ReelScraper/**
+!AnalysisEngine
+!AnalysisEngine/**
+!AutoSearch
+!AutoSearch/**
+!SimilarContent
+!SimilarContent/**
+!_producer-template
+!_producer-template/**
+!Dashboard
+!Dashboard/**
+!documentation
+!documentation/**
+!scripts
+!scripts/**
+!niches
+!niches/**
+!demo-data
+!demo-data/**
+
+# ---- allow the bash entry points ---------------------------------------------------------
+# COPY'd into the `dev` target only, but they must be IN the context for that COPY to work.
+# `cr` is deliberately absent: it is a host-side launcher and has no job inside an image.
+!init
+!demo
+!stop
+!clean
+!health
+!docsite
+
+# ---- allow the container files -----------------------------------------------------------
+!docker
+!docker/**
+
+# ==========================================================================================
+# RE-EXCLUDE, inside the allowed trees. Last match wins, so everything below overrides the
+# `!` rules above.
+# ==========================================================================================
+
+# ---- secrets. Never in a layer, never in a volume. ---------------------------------------
+# The hub reads agent .env files for PRESENCE ONLY (app.py:614 — "never returned, never
+# logged"), and app.py ORs the hub's live environment with the agent's .env, so env-only
+# injection already reads as "present" in the Dashboard with zero source change. The bind
+# mount delivers the real files at runtime; the image must never carry them.
+# `.env.example` files ARE tracked and ARE wanted — the patterns below do not match them.
+**/.env
+**/.env.local
+**/.env.*.local
+**/session.txt
+**/*.pem
+**/*.key
+**/*.p12
+**/credentials.json
+
+# ---- build and dependency output ---------------------------------------------------------
+# Also a CORRECTNESS requirement, not just size. app.py:333-337 `_interpreter()` returns
+# ROOT/.venv/bin/python IF IT EXISTS — it checks existence, never architecture. A macOS
+# Mach-O .venv/bin/python copied into a Linux image becomes PY, and every scrape/analyze/
+# media stage then dies with OSError: [Errno 8] Exec format error, recorded as rc -1
+# (app.py:2214), from a container that started perfectly.
+**/.venv/
+**/venv/
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/*.egg-info/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.coverage
+**/htmlcov/
+Dashboard/dist/
+ReelScraper/frontend/dist/
+documentation/site/
+
+# ---- real scraped third-party content ----------------------------------------------------
+# Publishing this is treated as a serious violation here (the anchored "live working data"
+# block in .gitignore; demo prints a warning; demo-data/README.md).
+ReelScraper/media/
+ReelScraper/renders/
+ReelScraper/analysis/
+ReelScraper/studio/*/
+ReelScraper/evals/
+ReelScraper/discovery/
+ReelScraper/producers/
+ReelScraper/references/
+ReelScraper/backups/
+ReelScraper/platforms/*/content.json
+ReelScraper/platforms/*/profiles_meta.json
+ReelScraper/platforms/*/*_raw*.json
+ReelScraper/platforms/*/*.csv
+ReelScraper/platforms/*/*.xlsx
+# Hand-curated real creator targeting lists — unreproducible operator input AND real handles.
+ReelScraper/platforms/*/pages.txt
+ReelScraper/platforms/*/creators.txt
+ReelScraper/platforms/*/seeds.txt
+ReelScraper/platforms/*/keywords.txt
+ReelScraper/platforms/*/discovered_pages.txt
+
+# ---- agent-local state and operator scratch ----------------------------------------------
+# pipeline_cascade.json is new (the percentage funnel, app.py:2791) and holds this operator's
+# tuned batch size, pass-through percentages and per-stage marks. pipeline_schedule.json
+# (app.py:2635) holds their schedule. config/agents/*.json holds per-agent config including
+# the `discovery_enabled` kill switch. None of that is anyone else's default.
+ReelScraper/memory/*/content.db
+ReelScraper/memory/shared/insights.jsonl
+ReelScraper/memory/shared/INSIGHTS.md
+ReelScraper/config/agents/
+ReelScraper/config/pipeline_schedule.json
+ReelScraper/config/pipeline_cascade.json
+AnalysisEngine/work/
+AutoSearch/memory/plan.json
+AutoSearch/memory/caps/
+AutoSearch/*_raw.json
+SimilarContent/assets/
+
+# ---- LOGS ARE THIRD-PARTY-IDENTIFYING, not diagnostics -----------------------------------
+# ReelScraper/logs/agents.jsonl carries a content_id per record; media filenames are
+# <media_pk>_<user_pk> and the trailing field is a real account PK. Scrape logs additionally
+# embed absolute host paths (/Users/<name>/...).
+**/logs/
+.hub.log
+.hub.pid
+
+# ---- the demo dataset travels privately and never in an image ----------------------------
+# `**/*.zip` costs nothing: no tracked file in this repo is a .zip, and `clean` writes its
+# archives to backups/, excluded below.
+**/*.zip
+demodataset.zip
+demo-data/manifest.json
+demo-data/data/**
+!demo-data/data/.gitkeep
+
+# ---- archives of real data. The single densest leak vector: one file, every scraped
+#      artifact, no keys but the whole corpus.
+backups/
+
+# ---- history and CI ----------------------------------------------------------------------
+.git/
+.github/
+.pre-commit-config.yaml
+
+# ---- noise -------------------------------------------------------------------------------
+**/.DS_Store
+**/*.swp
+**/*.swo
+**/.idea/
+**/.vscode/
+**/.claude/
+**/.playwright-mcp/

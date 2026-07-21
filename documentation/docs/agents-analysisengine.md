@@ -2,7 +2,7 @@
 
 AnalysisEngine is the pipeline's **analyzer**. It watches the top-viral clips that the `media` stage has downloaded, walks them frame-by-frame with Gemini, and writes back a rich, generation-ready **blueprint** — the shared substrate that every producer (SimilarContent, and future proposal/idea/template agents) reads before it writes anything.
 
-It occupies the **Blueprint** stage of the [7-stage pipeline](architecture.md) (labeled "Blueprint" on the board, not "Analyze," to avoid collision with the scoring stage that already runs inside ReelScraper).
+It occupies the **Blueprint** stage of the [8-stage pipeline](architecture.md) (labeled "Blueprint" on the board, not "Analyze," to avoid collision with the scoring stage that already runs inside ReelScraper).
 
 !!! note "Integration boundary"
     AnalysisEngine never touches another agent's files. It talks to the hub exclusively over `/api/*` (`BACKEND_API`, default `http://127.0.0.1:8787`), and it talks to Google exclusively through the Gemini File API. See [Architecture](architecture.md) for the one-integration-point principle.

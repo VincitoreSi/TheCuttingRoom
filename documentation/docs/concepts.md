@@ -306,5 +306,5 @@ Both gates share the same design properties:
 ## See also
 
 - [Architecture](architecture.md) — component roster, ownership boundaries, and the roadmap of future producers.
-- [Pipeline Stages](architecture.md) — the seven-stage Discover→Sources→Scrape→Analyze→Media→Blueprint→Studio flow these designs support.
+- [Pipeline Stages](architecture.md) — the eight-stage Discover→Sources→Scrape→Analyze→Media→Blueprint→Propose→Studio flow these designs support.
 - [API Reference](api-reference.md) — the full `/api/*` surface referenced throughout this page.

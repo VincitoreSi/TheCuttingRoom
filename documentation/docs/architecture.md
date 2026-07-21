@@ -2,7 +2,7 @@
 
 The pipeline is a set of independent agents that never talk to each other directly. Every read and
 every write goes through one FastAPI service — **the hub** — over plain HTTP. This page covers the
-component map, the 7-stage data flow, the on-disk storage layout, the memory model, and the
+component map, the 8-stage data flow, the on-disk storage layout, the memory model, and the
 platform-wide concerns (logging, evals, config, secrets) that every agent implements the same way.
 
 !!! note "The one integration principle"
@@ -74,10 +74,12 @@ graph LR
     subprocess pipeline control. Moving it would buy no additional decoupling, since HTTP already
     provides that boundary.
 
-## The 7-stage data flow
+## The 8-stage data flow
 
 Discovery was prepended to an originally 6-node board (Sources → Scrape → Analyze → Media →
-Blueprint → Studio) once AutoSearch was added, making it 7 stages end to end.
+Blueprint → Studio) once AutoSearch was added. Propose was later split out of Studio when
+producing a recipe became a pipeline stage the hub can launch on its own — so Studio is now
+purely the human gate, and Propose is the step that fills it. That makes 8 stages end to end.
 
 ```mermaid
 flowchart LR
@@ -86,7 +88,8 @@ flowchart LR
     SC --> AN["4. Analyze / score\n(run.py analyze, virality.py)"]
     AN --> M["5. Media\n(download_media.py)"]
     M --> BP["6. Blueprint\n(AnalysisEngine, Gemini)"]
-    BP --> ST["7. Studio\n(producers)"]
+    BP --> PR["7. Propose\n(producer, proposes:true)"]
+    PR --> ST["8. Studio\n(the human gate)"]
     ST --> G{Human gate}
     G -->|approved| Post[Post]
     G -->|rejected| Drop[Dropped]
@@ -100,7 +103,8 @@ flowchart LR
 | 4. Analyze / score | `run.py analyze` + `core/virality.py` | the 4-signal engine (`engagement_rate`, `reach_multiplier`, `outlier_score`, `velocity`), percentile-normalized and blended into a `virality_score` (0-100) + tier; xlsx/CSV reports; indexed memory |
 | 5. Media | `download_media.py` | top-viral clips persisted to `media/<p>/<content_id>.mp4` (+ `.jpg`) for inline board playback and for AnalysisEngine to watch |
 | 6. Blueprint | AnalysisEngine | schema_version-2 blueprint via `POST /api/analysis/{p}`: `video_metadata`, `global_style`, `audio`, `audio_strategy`, `characters_and_subjects[]`, `text_overlays[]`, `shots[]` (each with `generation_prompt`/`negative_prompt`), `regeneration_guide`, `virality_formula`, `evaluation` |
-| 7. Studio | producers (SimilarContent + future proposal/idea/template agents) | markdown proposals via `POST /api/studio/{p}` (mandatory `## Audio` block), gated by human approve/reject before posting |
+| 7. Propose | the one producer declaring `proposes: true` (SimilarContent today) | ranks the corpus by how cheap each winner is to remake (`score_ease`), joins each pick to its blueprint, and writes a recipe. Launchable as a stage (`POST /api/pipeline/{p}/propose`) and the last boundary the [cascade](api-reference.md#the-cascade) fires unattended. Free — it reads blueprints and writes markdown |
+| 8. Studio | `POST /api/studio/{p}` + the gate | markdown proposals (mandatory `## Audio` block), gated by human approve/reject before posting. Approved items become renderable |
 
 !!! note "Naming: Blueprint, not Analyze"
     Stage 6 is labeled **Blueprint** on the pipeline board, not "Analyze," specifically to avoid
@@ -245,6 +249,28 @@ GET /api/config/agent/{agent}/secrets/status → [{name, env_var, present, requi
 
 Actual credentials (Gemini keys, Anthropic keys, Instagram session cookies) stay local to the
 agent process that needs them, referenced everywhere else purely by the env-var name.
+
+## Pipeline control
+
+The hub implements three mechanisms for controlling when and how pipeline stages execute:
+
+- **Manual dispatch** — `POST /api/pipeline/{platform}/{stage}` fires one stage. The hub
+  checks readiness (are the preconditions met?) and returns 409 with the reason if not.
+  `POST /api/pipeline/{platform}/run-all` chains `scrape → analyze → media →
+  analysis-engine` in order, stopping at the first failure.
+- **Timer-based schedule** (`PUT /api/schedule/{platform}`) — configurable hourly cadence
+  per platform. Runs free stages only (`analysis-engine` is opt-in). Persisted across hub
+  restarts and fail-closed on any config read problem.
+- **Cascading heartbeat** (`PUT /api/cascade/{platform}`) — a 60s background tick that
+  automatically triggers downstream stages based on input watermarks rather than wall-clock
+  time. Off by default. Stages fire serially (never in parallel), and the tick respects
+  backpressure from manual runs and run-all. `render` is structurally excluded — it can never
+  fire through the cascade.
+
+Any running stage can be stopped via `POST /api/pipeline/{platform}/{stage}/stop`, which
+sends SIGTERM to the whole process group. The scrapers check a cooperative stop flag between
+creators, so everything already saved is kept. If the process survives 20 seconds it receives
+SIGKILL. Stopping a stage inside a `run-all` halts the entire run.
 
 ## Deployment note
 

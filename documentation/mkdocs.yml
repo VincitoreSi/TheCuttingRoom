@@ -46,6 +46,7 @@ nav:
   - Guide:
       - Quickstart & Usage: quickstart.md
       - Entry Points & Demo Data: entry-points.md
+      - Run in Docker: docker.md
       - CLI Reference: cli.md
       - Niches: niches.md
   - Architecture:

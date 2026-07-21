@@ -43,7 +43,7 @@ Full responsibilities and boundaries for each are in [Architecture](architecture
 
 ## The pipeline, end to end
 
-Content flows through seven stages, starting with discovering *who* to watch and ending with a human-approved draft ready to post:
+Content flows through eight stages, starting with discovering *who* to watch and ending with a human-approved draft ready to post:
 
 ```mermaid
 flowchart LR
@@ -52,7 +52,8 @@ flowchart LR
     C --> D[Analyze / Score]
     D --> E[Media]
     E --> F[Blueprint]
-    F --> G[Studio]
+    F --> P[Propose]
+    P --> G[Studio]
     G --> H{Human gate}
     H -->|approve| I[Post]
     H -->|reject| F
@@ -66,7 +67,8 @@ flowchart LR
 | **Analyze / Score** | ReelScraper's 4-signal virality engine | Percentile-normalized `virality_score` (0–100) + tier per post |
 | **Media** | ReelScraper | Downloaded video + thumbnail for top-viral clips, `media/<platform>/<content_id>.mp4` |
 | **Blueprint** | AnalysisEngine | Schema-2 blueprint via `POST /api/analysis/{platform}` — shots, characters, text overlays, regeneration guide |
-| **Studio** | Producer agents (SimilarContent, and future proposal/idea/template agents) | Markdown proposals via `POST /api/studio/{platform}`, gated by a human before posting |
+| **Propose** | The producer declaring `proposes: true` (SimilarContent today) | Ranks winners by how cheap they are to remake, joins each to its blueprint, and writes a recipe. Free, and the last stage the cascade can fire unattended |
+| **Studio** | `POST /api/studio/{platform}` + the human gate | Markdown proposals, approved or rejected by a person before anything is posted or rendered |
 
 This loop is designed to close: what gets approved and posted feeds back into what you watch and score next, so the system keeps learning what's currently working. See [Pipeline](architecture.md) for the full stage-by-stage breakdown, including how AutoSearch's candidate-approval loop feeds `pages.txt`.
 
@@ -96,7 +98,7 @@ From there, running the other agents (AnalysisEngine, SimilarContent, AutoSearch
 
 - [Quickstart](quickstart.md) — install, boot the hub, run your first pipeline pass.
 - [Architecture](architecture.md) — every agent's responsibilities and boundaries in depth.
-- [Pipeline](architecture.md) — the seven stages, stage by stage, with what each one reads and writes.
+- [Pipeline](architecture.md) — the eight stages, stage by stage, with what each one reads and writes.
 - [API Reference](api-reference.md) — the complete `/api/*` surface.
 - [Data Model](architecture.md) — `content_id`, `audio_id`, `candidate_id`, `run_id`, and the on-disk layout they tie together.
 - [Producer SPI](agents-producers.md) — how to build and register a new producer agent.

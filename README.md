@@ -124,6 +124,29 @@ Each agent (AnalysisEngine, AutoSearch, SimilarContent, …) is its own director
 own `.env.example`; `uv sync` then `uv run cli.py …` inside it. See `./docsite` for the full
 quickstart, API reference, and per-agent guides.
 
+### Run it in Docker
+
+If you'd rather install nothing but Docker — no uv, no Python, no Node, no ffmpeg — there is a
+container lane. One image, one container, and `./cr` as the only host-side command:
+
+```bash
+./cr build      # 86s cold, measured; 305.8 MB image / 92 MB to pull
+./cr up         # start the hub and open the browser (does NOT rebuild)
+./cr down       # stop the container; your data is on the bind mount and is untouched
+./cr agent similar-content propose --platform instagram --dry-run
+./cr health --strict --live
+./cr help       # works on a machine with no Docker installed
+```
+
+Your checkout is bind-mounted, so keys stay in each agent's own `.env` and the hub still never
+stores a secret value. Windows is **WSL2 only** — clone inside the WSL2 filesystem; there is no
+`cr.cmd`. The hub has no authentication, so compose publishes it on `127.0.0.1` and `[::1]`
+only: changing that to `"8787:8787"` puts an unauthenticated subprocess launcher on your LAN.
+`./cr verify-loopback` proves the boundary on the machine in front of you.
+
+Full details — per-platform first run, the `./cr` reference, volumes, upgrades, the security
+posture and the known sharp edges — in [Run it in Docker](documentation/docs/docker.md).
+
 ## What you need, and what runs where
 
 **Nothing here requires Claude Code, an editor, or an AI coding session.** Every stage is a
@@ -174,6 +197,34 @@ uv run cli.py render --platform instagram --file <name>.md
 The rendered reel appears in **Studio → Renders** with its sound sheet, a generated caption,
 and the on-disk path to upload by hand. Instagram has no post API for this, so the last step
 is deliberately manual.
+
+### Letting it run itself
+
+Doing that by hand once is how you learn the pipeline. After that, two mechanisms run it
+unattended, both **off by default** and both per-platform:
+
+- **A timer** — every N hours, run `scrape → analyze → media`.
+- **The cascading heartbeat** — a 60s tick that watches how much *new* material has landed
+  and fires the next stage that has enough to chew on.
+
+You size the heartbeat as a funnel: one batch (`scrape_count`, 250 reels by default), then
+how much of each stage's input is worth passing to the next — 100% analyzed, 60% worth
+downloading, 20% of those worth a blueprint, 20% of those worth proposing against. Because
+no percentage can exceed 100, **a later stage can never be configured to fire more often
+than the one feeding it**; the funnel only ever narrows.
+
+Two things it will never do. It never runs `render`, which is the only step that spends
+money per frame — that stays behind a human click, by construction rather than by config.
+And the blueprint stage costs Gemini credits, so it sits behind its own explicit opt-in and
+stamps its watermark when you enable it, meaning switching it on starts the clock rather
+than settling months of backlog in one unattended burst.
+
+Any running stage can be cut short from the board — the Stop button on a running card. Stops
+are cooperative: scrapers finish the creator they are on and save, so a stop keeps everything
+already written instead of discarding the run.
+
+Both are configured in the Dashboard (**Config**), or over the API — see
+[the cascade](documentation/docs/api-reference.md#the-cascade).
 
 ## The one principle
 

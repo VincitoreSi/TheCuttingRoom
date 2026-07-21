@@ -59,7 +59,7 @@ This boots the FastAPI hub and opens the Dashboard at **http://127.0.0.1:8787**.
 
 ## Run the pipeline end-to-end
 
-The pipeline is seven stages. Discover and Sources feed the handle list; Scrape through Studio turn that list into gated, publishable content.
+The pipeline is eight stages. Discover and Sources feed the handle list; Scrape through Studio turn that list into gated, publishable content.
 
 ```mermaid
 flowchart LR
@@ -168,8 +168,57 @@ The reel then appears in **Studio → Renders** with its sound sheet, the captio
 
 `--restitch` re-encodes the frames already on disk — free, and useful after changing the aspect ratio or fit.
 
+### Propose as a pipeline stage
+
+Propose is also launchable as a pipeline stage through the hub (the same dispatcher that runs
+scrape/analyze/media), which is how the cascading heartbeat fires it:
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/pipeline/instagram/propose
+```
+
+Unlike the CLI's `propose` (which always runs locally in the SimilarContent directory),
+the pipeline stage reads the registered producer manifest to resolve the subprocess command.
+It calls the same marking engine and writes to the same human gate. Propose is **free** — it
+reads blueprints and writes markdown, no API credits.
+
+### Stopping a running stage
+
+Every stage launched through the hub — including stages in a `run-all` — can be stopped:
+
+```bash
+curl -X POST http://127.0.0.1:8787/api/pipeline/instagram/scrape/stop
+```
+
+Stopping sends SIGTERM to the whole process group. The scrapers check the stop flag between
+creators, so everything already saved is kept. If the process is still alive after 20 seconds
+it receives SIGKILL. Clicking twice is harmless — the second call re-signals a still-running
+group.
+
+Stopping a stage inside a full pipeline run **halts the run**: later stages never launch, and
+the platform's run claim is released so it can be run again immediately.
+
 !!! tip "Watch it happen live"
     Open the Dashboard's **Activity** tab while stages run — it streams the same `/api/events` SSE channel the CLI jobs write to, so you'll see per-item lifecycle events (`item.start` → `item.stage` → `item.done`) as they happen instead of polling.
+
+## Automatic runs
+
+The hub supports two mechanisms for unattended pipeline execution, both off by default:
+
+- **Timer-based schedule** (`PUT /api/schedule/{platform}`) — fires every N hours,
+  runs `scrape → analyze → media` (free stages only). `analysis-engine` requires an explicit
+  `include_blueprints` opt-in per platform. Best-effort while the hub is running.
+- **Cascading heartbeat** (`PUT /api/cascade/{platform}`) — a 60s daemon tick that counts
+  new input since the last watermark and fires the next due stage. You size it as a funnel:
+  one batch (`scrape_count`, 250 reels by default) and then how much of each boundary's
+  input is expected to survive to the next — 100% analyzed, 60% worth downloading, 20% of
+  those worth a paid blueprint, 20% of those worth proposing against. Because no percentage
+  can exceed 100, a later stage can never be configured to fire more often than the one
+  feeding it. Stages fire serially — never in parallel. `render` can never fire through the
+  cascade (spends image-API credits).
+
+Enable either from the Dashboard's **Board → Schedule** panel, or via the API. Both are
+per-platform and persist across hub restarts.
 
 ## Dashboard tour
 
@@ -177,7 +226,7 @@ The Dashboard ("The Cutting Room") is a React 18 + TypeScript + Vite control boa
 
 | Tab | What it shows |
 |---|---|
-| **Board** | The 7-stage pipeline as a live board; per-agent workflow lanes reduced from the central log (`GET /api/agents/{name}/board`) |
+| **Board** | The 8-stage pipeline as a live board; per-agent workflow lanes reduced from the central log (`GET /api/agents/{name}/board`) |
 | **Corpus** | Scraped + scored content: virality factors, top-N clips, narrative briefs, and full-text search over the corpus |
 | **Sounds** | Trending-audio table — adoption velocity within tracked creators, bucketed Rising/Hot/Saturated/Evergreen |
 | **Studio** | Producer proposals awaiting the human gate — approve or reject generated content before it posts |

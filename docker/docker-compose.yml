@@ -1,0 +1,503 @@
+# docker/docker-compose.yml
+#
+# Invoked through ./cr, which exports COMPOSE_PROJECT_NAME, HUB_PORT, TCR_UID/TCR_GID and
+# TCR_BUILD_ID. Running `docker compose up` by hand in this directory FAILS ON PURPOSE:
+# `name:` below is ${COMPOSE_PROJECT_NAME:?} with no default, so compose refuses rather than
+# silently picking the directory basename and collapsing two clones into one project.
+#
+# Optional knobs (WITH_FFMPEG, WITH_DOCS, DOCS_PORT, TZ, ...) come from docker/.env, which
+# compose reads automatically because the project directory is the directory of this file.
+# Copy docker/.env.example to docker/.env to use them. NO SECRETS GO IN THERE — see the
+# "there is no env_file block" note under the hub service.
+#
+# WINDOWS IS WSL2 ONLY (DECISIONS.md D1). There is no cr.cmd and no PowerShell entry point.
+# The supported layout is a clone INSIDE the WSL2 filesystem (~/... , never /mnt/c/...) with
+# Docker Desktop on the WSL2 backend, driven by ./cr from a WSL2 shell. A native NTFS clone
+# is not supported and is not tested.
+#
+# No `version:` key — obsolete since Compose v2 and warned about by newer releases (this
+# machine has Compose v5.3.0). Minimum supported: Compose 2.20, for the top-level `name:`.
+# ./cr asserts it.
+
+name: ${COMPOSE_PROJECT_NAME:?run this through ./cr — it derives a per-checkout project name}
+# COMPOSE_PROJECT_NAME MUST NOT DEFAULT.
+#
+# Compose derives the project name from the directory basename. Two clones both named
+# TheCuttingRoom — say ~/work/TheCuttingRoom and ~/niches/fitness/TheCuttingRoom — collapse
+# into ONE project. `./cr down` in clone B then stops clone A's container, and the named
+# volumes below are SHARED between the checkouts, so the two clones silently share all four
+# .venv directories and node_modules.
+#
+# That is the same class of bug scripts/_common.sh was written to prevent, in its own words:
+# "stopping the wrong one is exactly the failure this project has already been bitten by."
+# ./cr pins the name into ReelScraper/.env next to HUB_PORT, derived from a hash of the
+# ABSOLUTE checkout path, so it is stable for the life of the checkout — the same design as
+# claim_port.
+
+services:
+  hub:
+    build:
+      context: ..                     # repo root, so the root .dockerignore applies
+      dockerfile: docker/Dockerfile
+      target: runtime
+      args:
+        WITH_FFMPEG: ${WITH_FFMPEG:-1}
+        WITH_DOCS: ${WITH_DOCS:-0}
+        BUILD_ID: ${TCR_BUILD_ID:-dev}
+        # minimal (built from source, DECISIONS.md D2.2) or static (the documented fallback).
+        FFMPEG_VARIANT: ${FFMPEG_VARIANT:-minimal}
+    image: cuttingroom:${TCR_IMAGE_TAG:-local}
+
+    # ------------------------------------------------------------------------------------
+    # THE SECURITY LINE. Read this before editing it.
+    #
+    # The hub has NO AUTHENTICATION. All 55 routes are unauthenticated (the count moves, the
+    # property does not). One of them, POST /api/studio/{platform}/{file}/render
+    # (app.py:1035), launches a subprocess. Another, POST /api/producers/register
+    # (app.py:1363), supplies that subprocess's argv — its ProducerManifest is `extra="allow"`
+    # (app.py:149) and the only guard is _validate_render_cmd's five-launcher allowlist
+    # (app.py:2032-2053).
+    #
+    # On the host today the hub binds 127.0.0.1, so none of that is reachable from the LAN.
+    # Inside a container 127.0.0.1 is the CONTAINER's own loopback, so the hub must bind
+    # 0.0.0.0 to be reachable through a published port at all. The property therefore moves
+    # from the process bind to THIS LINE.
+    #
+    #   "127.0.0.1:${HUB_PORT}:8787"   correct — host listener on loopback only
+    #   "${HUB_PORT}:8787"             WRONG   — host listener on 0.0.0.0, LAN-reachable
+    #   "8787:8787"                    WRONG   — same, and pinned to the wrong host port
+    #
+    # Both forms give the CONTAINER an identical 0.0.0.0 bind; only the host-side listener
+    # differs. On Linux the bare form writes a DNAT rule with no -d restriction, and Docker's
+    # DOCKER chain sits in nat/PREROUTING AHEAD of the INPUT rules ufw and firewalld write —
+    # so `ufw deny 8787` does NOT protect it. Pinning the host IP here is the control this
+    # whole design depends on.
+    #
+    # IT IS NOT AN UNCONDITIONAL CONTROL ON LINUX. Loopback publishing has historically
+    # depended on net.ipv4.conf.*.route_localnet=1, which disables martian filtering for
+    # 127.0.0.0/8; recent engines add raw-table DROP rules for exactly that. WHICH ENGINE
+    # VERSIONS ARE SAFE HAS NOT BEEN ESTABLISHED — see RISKS.md R20. ./cr asserts a minimum
+    # engine version; `./cr verify-loopback` is what OBSERVES the property on the machine in
+    # front of you, from the HOST, where the listener is.
+    #
+    # The [::1] line is not decoration: 127.0.0.1: does not cover [::1]:8787, and a browser
+    # that resolves "localhost" to ::1 first gets a connection failure. app.py:352's CORS
+    # regex already accepts [::1], so the origin side is fine either way. It can also
+    # HARD-FAIL `up` on a daemon with IPv6 disabled (ipv6.disable=1). If that happens: delete
+    # the "[::1]:" line, NEVER the "127.0.0.1:" prefix on the other one. ./cr up maps that
+    # bind error to exactly those words.
+    #
+    # health's `hub binds loopback only` check greps cli.py and api/ for a literal "0.0.0.0"
+    # and keeps PASSING here, because cli.py:33 reads HUB_HOST from the environment and there
+    # is no literal to find —
+    # RISKS.md R2, the assertion silently evaporating in a container. The replacement is a
+    # host-side live check, and it cannot live in the `health` service below: that service is
+    # network_mode: service:hub, where the only non-loopback address IS the container's eth0
+    # and the hub really is listening on it. A check written there either always fails or gets
+    # weakened until it asserts nothing. Host-side only: `./cr verify-loopback`.
+    # ------------------------------------------------------------------------------------
+    ports:
+      - "127.0.0.1:${HUB_PORT:?set by ./cr from ReelScraper/.env}:8787"
+      - "[::1]:${HUB_PORT}:8787"
+
+    environment:
+      HUB_HOST: "0.0.0.0"           # see the long ENV comment in docker/Dockerfile
+      HUB_PORT: "8787"              # fixed inside; only the host side of the publish varies
+      TCR_CONTAINER: "1"
+      TCR_BUILD_ID: ${TCR_BUILD_ID:-dev}
+      # Seconds the entrypoint gives the hub and every stage to finish after SIGTERM, before
+      # it escalates to SIGKILL. MUST stay comfortably below stop_grace_period below, or the
+      # runtime kills the cgroup first and the cooperative stop never happens.
+      TCR_STOP_GRACE: ${TCR_STOP_GRACE:-100}
+      # TZ matters for LOG LEGIBILITY only, not for correctness. Scheduling arithmetic is
+      # epoch-based and therefore TZ-immune, but core/logsetup.py formats with
+      # time.localtime() and no offset, and builds the log FILENAME from local time. Without
+      # this, logs say 14:30 UTC while the Dashboard renders next_run_at with
+      # toLocaleString() in the browser's zone. Don't over-fix: the other half is a %z in
+      # logsetup, which is a source change.
+      TZ: ${TZ:-UTC}
+
+      # A uid with no /etc/passwd entry (any TCR_UID != 1000 on Linux) gets HOME=/ , which is
+      # not writable. uv and anything calling Path.home()/expanduser then fail in ways that
+      # name nothing useful. /tmp is a tmpfs below and is 1777.
+      HOME: /tmp
+      UV_CACHE_DIR: /tmp/uv-cache
+      XDG_CACHE_HOME: /tmp/.cache
+      #
+      # Knobs that need source changes first, commented out until they land:
+      # TCR_CHECKOUT_ID: ${COMPOSE_PROJECT_NAME}   # /api/hub identity, replaces path compare
+      # HUB_ADVERTISE: "127.0.0.1"                 # stop BACKEND_API becoming http://0.0.0.0
+
+    # -------------------------------------------------------------------------------------
+    # THERE IS NO env_file: BLOCK, AND ITS ABSENCE IS THE POINT.
+    #
+    # An earlier draft loaded ../AnalysisEngine/.env, ../AutoSearch/.env and
+    # ../SimilarContent/.env here. That was wrong three times over:
+    #
+    #  1. It stores secret VALUES. Compose materialises env_file into the container's
+    #     Config.Env, which `docker inspect` and `docker compose config` print verbatim and
+    #     which is persisted on host disk in config.v2.json. app.py:614 says of the one
+    #     function that reads a key file: "PRESENCE ONLY ... never returned, never logged".
+    #     env_file makes the hub store all of them for the life of the process.
+    #  2. It hands them to the attacker-supplied subprocess. _stage_env() (app.py:2119-2131)
+    #     is `dict(os.environ)`, passed to every spawned stage — including `render`, whose
+    #     argv arrives over the UNAUTHENTICATED POST /api/producers/register. Today a
+    #     _validate_render_cmd bypass has to go and read files; with env_file the keys are in
+    #     its environ before it does anything. That widens exactly the blast radius
+    #     containerizing is supposed to narrow.
+    #  3. It buys nothing. The bind mount already delivers those files at those paths, which
+    #     is the mechanism every presence check actually uses.
+    #
+    # It was also functionally wrong: _common.sh writes BACKEND_API=<host port> into each of
+    # those three files, and merging three agents' .env files into one environment collides
+    # AGENT_NAME and BACKEND_API last-file-wins.
+    #
+    # If an operator genuinely wants env-only injection they add their own override file and
+    # accept that the value is then visible to `docker inspect` and to every stage.
+    # -------------------------------------------------------------------------------------
+
+    volumes:
+      # ----------------------------------------------------------------------------------
+      # THE CHECKOUT. One bind mount, at /app, read-write.
+      #
+      # Named data volumes were rejected. Every data path in scripts/_common.sh's
+      # data_paths() lives INSIDE the checkout, interleaved with tracked source
+      # (platforms/<p>/content.json next to scrape.py; memory/<p>/content.db next to a
+      # tracked persona.md; studio/<p>/ next to a tracked README.md). `clean` needs
+      # `git ls-files --error-unmatch` against them and `git checkout -- '*/memory/*'`.
+      # A named volume splits `clean` into a container half and a host half, and _common.sh
+      # documents in the repo what happened the last time two copies of that list drifted.
+      #
+      # It also keeps app.py's "local_path" in a render record meaningful — the operator can
+      # actually open the rendered mp4.
+      # ----------------------------------------------------------------------------------
+      - ../:/app
+
+      # ----------------------------------------------------------------------------------
+      # MASKING VOLUMES — mandatory, and a CORRECTNESS requirement, not a performance one.
+      #
+      # app.py:333-337 _interpreter() returns the first of (.venv/bin/python,
+      # venv/bin/python) that EXISTS. It checks existence, never architecture. On an Apple
+      # Silicon host that file is a Mach-O binary; mounted into a Linux container it exists,
+      # so PY becomes that path, and every STAGE_CMD entry using PY — scrape, analyze, media
+      # (app.py:1974-1977) — fails with OSError: [Errno 8] Exec format error, recorded as
+      # rc -1 (app.py:2214). Three red nodes on the Board from a container that started
+      # perfectly. This is the failure you hit on day one without these four lines.
+      # (Nothing in this repo creates a `venv/` without the dot, and .dockerignore excludes
+      # both; entrypoint.sh step 0 probes the interpreter and says all of this in one
+      # sentence if someone removes them.)
+      #
+      # NAMED, not anonymous. Anonymous volumes survive `docker compose down` and silently
+      # keep masking a rebuilt image's new venv with the old one. Named volumes can be
+      # dropped by name — that is what `./cr rebuild` does.
+      #
+      # THE -runtime SUFFIX IS LOAD-BEARING. The `health` and `docs` services run the `dev`
+      # image and mount venv-*-dev instead. A named volume is seeded from the image ONCE, by
+      # whichever container mounts it first — so if both targets shared one name, the normal
+      # `./cr up` then `./cr health` order would seed them from the --no-dev runtime build
+      # and ./health would run with no pytest, no httpx and no mkdocs, with UV_NO_SYNC=1
+      # forbidding self-repair. The gate would be structurally unable to pass.
+      # ----------------------------------------------------------------------------------
+      - venv-reelscraper-runtime:/app/ReelScraper/.venv
+      - venv-analysisengine-runtime:/app/AnalysisEngine/.venv
+      - venv-autosearch-runtime:/app/AutoSearch/.venv
+      - venv-similarcontent-runtime:/app/SimilarContent/.venv
+
+    tmpfs:
+      # The dashboard. ReelScraper/frontend/dist is NOT git-tracked (`git ls-files
+      # ReelScraper/frontend` is empty; .gitignore:50 is `dist/`), so on a fresh clone the
+      # bind mount above shadows the image's build output with an empty host directory and
+      # app.py:3509-3511 serves the self-polling "building" page at HTTP 503.
+      #
+      # tmpfs rather than a named volume: a named volume seeds from the image only when
+      # EMPTY, so after a rebuild it keeps serving the OLD UI forever. ~1 MB copied by the
+      # entrypoint on every start. Cheap, always fresh, never written to the host.
+      #
+      # mode=1777, NOT 0755. A Docker tmpfs is mounted root:root and `mode=` sets permission
+      # bits, not ownership; Compose's tmpfs short syntax has no portable uid=/gid= option.
+      # With `user:` below, a 0755 root-owned tmpfs makes the entrypoint's copy fail with
+      # EACCES on the FIRST START ON EVERY PLATFORM. 1777 (sticky, world-writable, like /tmp)
+      # is the fix that does not depend on an unverified mount-option passthrough. This is
+      # RAM inside one container's mount namespace; 1777 costs nothing here.
+      - /app/ReelScraper/frontend/dist:mode=1777,size=64m
+      # AnalysisEngine/cli.py:39,195-198 downloads corpus media into work/ from the hub over
+      # HTTP and deletes it in a finally. Pure scratch, never in data_paths(), and it is
+      # video — keep it off the bind mount. 1777 for the same reason as above: at 0700
+      # root-owned, a non-1000 uid cannot even traverse it and every blueprint run fails at
+      # corpus download.
+      - /app/AnalysisEngine/work:mode=1777,size=2g
+      - /tmp:mode=1777,size=512m
+
+      # .git is masked with an empty tmpfs. Nothing in the runtime image uses git (verified:
+      # no git invocation in ReelScraper/api, ReelScraper/core or ReelScraper/cli.py, and git
+      # is deliberately not installed in the runtime target). What it removes is a writable
+      # .git/hooks inside the blast radius of a _validate_render_cmd bypass. `:ro` would NOT
+      # do — the threat is writing a pre-commit hook the host later runs, and a read-only
+      # .git still leaks the whole history. This is blast-radius reduction and not a
+      # boundary: the checkout also contains ./cr, ./init, ./health and scripts/*.sh, all
+      # executed ON THE HOST by the user. Masked only here; the `health` service needs a real
+      # .git and does not mask it.
+      - /app/.git:mode=0755,size=1m
+
+    # LINUX: run as the invoking user so files written into the bind mount stay deletable by
+    # the user's own `clean`. ./cr sets TCR_UID/TCR_GID from `id -u`/`id -g` on Linux and
+    # leaves them at 1000 on Docker Desktop, which does its own uid translation.
+    user: "${TCR_UID:-1000}:${TCR_GID:-1000}"
+
+    # PID 1 must be a reaper. _run_job's Popen (app.py:2183) reaps its DIRECT child (uv), but
+    # uv's python grandchild reparents to PID 1 if orphaned, and the hub never wait()s on
+    # unknown children. Without this, a long scrape leaves zombies. tini reaps orphans
+    # regardless of process group, so start_new_session does not weaken it.
+    init: true
+
+    stop_grace_period: 120s
+    # 120s, and with docker/entrypoint.sh §5 in place it is now a REAL budget rather than
+    # decoration. Read the two halves together:
+    #
+    #   * `docker stop` SIGTERMs PID 1 only. tini forwards to the entrypoint, which does
+    #     `kill -TERM -1` — every process in this PID namespace except PID 1 and itself, i.e.
+    #     the hub AND every stage process group, without needing to know their pgids. The
+    #     three scrapers and AnalysisEngine install core/stopflag.install_stop_handler() and
+    #     check the flag at the top of their per-item loop, so for them this is the same
+    #     cooperative path the Stop button uses: everything scraped so far is saved.
+    #   * The entrypoint then waits up to TCR_STOP_GRACE (100s) for everything to exit and
+    #     escalates to SIGKILL itself, INSIDE this window. That is why the two numbers are
+    #     100 and 120 and not the same: the escalation has to happen before the runtime's.
+    #
+    # WITHOUT the entrypoint supervisor, none of that happens: nothing signals the stage
+    # groups (there is no @app.on_event("shutdown") in app.py — :363 is the only on_event and
+    # it is startup), uvicorn exits without unwinding (measured, cli.py:110-113), _run_job is
+    # on a daemon thread Python never joins, and the stage is SIGKILLed when the cgroup is
+    # torn down. See DOCKER-PLAN.md §7.1 / RISKS.md R8.
+    #
+    # STILL NOT FIXED HERE: uvicorn's graceful shutdown waits on open connections, and a
+    # dashboard tab holding the /api/events SSE stream (app.py:3358) can make the hub itself
+    # slow to exit. The upstream fix is a FastAPI shutdown hook walking _PROCS plus a uvicorn
+    # timeout_graceful_shutdown — a source change, not a compose change.
+
+    # restart: "no" — DELIBERATE, and it is a decision, not an omission.
+    #
+    # `unless-stopped` would (a) bring an unauthenticated subprocess launcher back up on every
+    # reboot and every daemon restart — with THREE background daemon threads running
+    # (_discovery_heartbeat_loop, _schedule_loop and the new _cascade_loop, started at
+    # app.py:368, :374 and :380) — on a laptop that travels; and (b) turn every fail-closed
+    # `exit 78` from the entrypoint (stamp mismatch, missing project dir, unwritable data dir,
+    # a host .venv showing through) into a crash loop that ./cr up hides behind its poll.
+    # ./cr up is the intended trigger.
+    restart: "no"
+
+    # EXACTLY ONE REPLICA, ALWAYS. JOBS, _JOB_SEQ, _PROCS (app.py:1957), _STOP_REQUESTED
+    # (:1963) and _LOG_BUF (:480) are module-level IN-PROCESS state, and /api/events
+    # (app.py:3358) streams a 1-second diff of that dict. Two replicas behind one address =
+    # two disjoint job ledgers, a run-all guard that no longer guards, a cascade that fires
+    # twice, and a Stop button that can only cancel jobs that happened to land on the replica
+    # the request reached.
+    #
+    # Two things enforce it, and it is worth knowing which does what: the fixed host-port
+    # publish above makes a second replica fail to start (the port is already allocated), and
+    # this key states the intent so `--scale` is an explicit override rather than a default.
+    deploy:
+      replicas: 1
+
+    # ------------------------------------------------------------------------------------
+    # Hardening. Every line here is forfeited by --privileged, by mounting
+    # /var/run/docker.sock, or by running as root with the checkout mounted read-write.
+    # Containerizing converts a _validate_render_cmd bypass from "code execution as the user
+    # on the host" into "code execution in a namespace whose only writable host path is the
+    # checkout". That is a real gain and it is easy to give back by accident.
+    #
+    # THERE IS NO DOCKER SOCKET MOUNT ANYWHERE IN THIS FILE, and there must never be one:
+    # /var/run/docker.sock is root on the host, and handing it to a service with an
+    # unauthenticated subprocess launcher is a full host compromise in one line.
+    #
+    # NOT USED, deliberately: network_mode: host. On Linux it genuinely gives a real 127.0.0.1
+    # bind and the strongest form of the property — but on Docker Desktop (macOS/Windows)
+    # host networking means the VM's network, so 127.0.0.1 inside is the VM's loopback and the
+    # browser cannot reach it at all. A compose file that depends on it is not portable.
+    #
+    # NOT USED, but evaluate it in the build pass: read_only: true. The container writes only
+    # to /tmp, the tmpfs mounts and the bind mount, so it may already hold — but uv and
+    # python have a habit of touching unexpected paths, and turning it on untested would
+    # produce a failure at the worst moment.
+    # ------------------------------------------------------------------------------------
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+    # Default bridge networking. Deliberate:
+    #  - scraping is guest-mode Instagram and key-free YouTube; bridge SNATs to the host IP,
+    #    so the source IP those platforms see is unchanged and IP-scoped rate limits behave
+    #    exactly as they do today. Do NOT add a proxy or VPN sidecar silently.
+    #  - app.py:168 assert_fetchable_url resolves a reference URL's host and rejects any
+    #    private/loopback/link-local/reserved address. On a bridge network that correctly
+    #    refuses 172.17.0.0/16 and host.docker.internal, and it is also what keeps a cloud
+    #    metadata endpoint blocked if this ever runs on a VM. Leave it alone.
+
+  # --------------------------------------------------------------------------------------
+  # The health / dev image. Never started by `./cr up`; used as
+  #     ./cr health [args]   ->  docker compose --profile dev run --rm health ./health [args]
+  # Same bind mount, plus node_modules and the four dev dependency groups.
+  # --------------------------------------------------------------------------------------
+  health:
+    profiles: ["dev"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: dev
+      args:
+        WITH_FFMPEG: "1"          # never optional here: without it health records a
+                                  # SKIP and the 12 @needs_ffmpeg tests in
+                                  # SimilarContent/tests/test_stitch.py silently do not run.
+                                  # In this image ffmpeg is present by construction, so those
+                                  # tests MUST run — assert the count, do not trust the tally.
+        WITH_DOCS: ${WITH_DOCS:-0}
+        BUILD_ID: ${TCR_BUILD_ID:-dev}
+        FFMPEG_VARIANT: ${FFMPEG_VARIANT:-minimal}
+    image: cuttingroom-dev:${TCR_IMAGE_TAG:-local}
+    # WITHOUT THIS, ./health IS NOT FOUND when someone overrides the entrypoint. The six entry
+    # points live at /app; the `dev` target already sets WORKDIR /app, and this pins it.
+    working_dir: /app
+    volumes:
+      - ../:/app
+      # SEPARATE from the hub's venv-*-runtime volumes. See the long note there: a named
+      # volume seeds once, from whichever container mounts it first, so sharing them means
+      # `./cr up` then `./cr health` runs the gate against the --no-dev venvs with no pytest
+      # and no way to install one (UV_NO_SYNC=1). `./cr rebuild` drops BOTH sets.
+      - venv-reelscraper-dev:/app/ReelScraper/.venv
+      - venv-analysisengine-dev:/app/AnalysisEngine/.venv
+      - venv-autosearch-dev:/app/AutoSearch/.venv
+      - venv-similarcontent-dev:/app/SimilarContent/.venv
+      # node_modules is large and full of platform-specific native binaries (rollup, esbuild,
+      # tailwind-oxide). Bind-mounting the host's copy is both wrong (wrong arch/OS) and slow
+      # (per-file open/stat over VirtioFS). Mask it with the image's copy.
+      - node-modules:/app/Dashboard/node_modules
+    tmpfs:
+      - /app/AnalysisEngine/work:mode=1777,size=2g
+      - /tmp:mode=1777,size=512m
+      # NOTE: .git is deliberately NOT masked here. `clean` and `health` need it —
+      # health sets IS_GIT=0 without it and four invariants become skips while the
+      # run still reports HEALTHY.
+    environment:
+      HUB_HOST: "127.0.0.1"     # inside the dev container the hub is a normal local process
+      HUB_PORT: "8787"
+      TZ: ${TZ:-UTC}
+      HOME: /tmp
+      UV_CACHE_DIR: /tmp/uv-cache
+      XDG_CACHE_HOME: /tmp/.cache
+      # Deliberately NOT UV_OFFLINE=1 — the dev image may legitimately need to resolve.
+      UV_OFFLINE: "0"
+      # The six entry points' container-mode guard is "TCR_MODE=container in ReelScraper/.env
+      # AND TCR_CONTAINER unset" (container_mode_guard, scripts/_common.sh). ReelScraper/.env
+      # is on the bind mount, so TCR_MODE is equally true INSIDE the container; without this
+      # variable `./cr health` and `./cr demo` would trip the very guard they exist to
+      # satisfy. Removing this line breaks both verbs.
+      TCR_CONTAINER: "1"
+      # Set by `./cr health`, which runs verify-loopback on the HOST first. Inside this netns
+      # the off-loopback check cannot see the host listener, so ./health can only record it
+      # as a skip unless it is told the host already proved it.
+      TCR_LOOPBACK_VERIFIED: ${TCR_LOOPBACK_VERIFIED:-}
+    user: "${TCR_UID:-1000}:${TCR_GID:-1000}"
+    init: true
+    # Same hardening as the hub. This service shares the hub's netns and the full read-write
+    # bind mount; there is no reason for it to carry more capability than the thing it tests.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    network_mode: "service:hub"
+    # network_mode: service:hub so `./health --live` reaches the hub on 127.0.0.1:8787 exactly
+    # as it does on a developer's laptop — health's endpoint GETs, the Range/206 check and
+    # the CORS check then run unmodified.
+    #
+    # THE CONSEQUENCE THAT MATTERS: in this netns the only non-loopback address is the
+    # container's own eth0, and the hub IS bound 0.0.0.0 there, so an "enumerate non-loopback
+    # IPv4 and assert it is refused" check run HERE either always fails or gets weakened until
+    # it asserts nothing. That check belongs on the host — `./cr verify-loopback`.
+    #
+    # There is no --no-deps escape hatch: --no-deps does not remove network_mode, so with the
+    # hub down Docker refuses to join a non-running container's netns. If you need ./health
+    # without a hub, bring the hub up first, or add a health-offline service without
+    # network_mode.
+    depends_on: [hub]
+    entrypoint: ["/usr/bin/tini", "--"]
+    command: ["sleep", "infinity"]
+
+  # --------------------------------------------------------------------------------------
+  # Docs live-reload. `./cr docsite`.
+  # --------------------------------------------------------------------------------------
+  docs:
+    profiles: ["docs"]
+    # A build: block, not just image:. Without it, `./cr docsite` on a machine that has only
+    # ever run `./cr up` fails with image-not-found, because nothing built cuttingroom-dev.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: dev
+      args:
+        WITH_FFMPEG: "1"
+        WITH_DOCS: ${WITH_DOCS:-0}
+        BUILD_ID: ${TCR_BUILD_ID:-dev}
+        FFMPEG_VARIANT: ${FFMPEG_VARIANT:-minimal}
+    image: cuttingroom-dev:${TCR_IMAGE_TAG:-local}
+    # The image ENTRYPOINT is tcr-entrypoint, which copies /opt/tcr/frontend-dist into
+    # /app/ReelScraper/frontend/dist. This service declares no dist tmpfs, so without this
+    # override that copy would land in the BIND-MOUNTED HOST CHECKOUT — writing into the
+    # user's tree on every docsite start and leaving a stale dist to confuse the host lane
+    # later.
+    entrypoint: ["/usr/bin/tini", "--"]
+    volumes:
+      - ../:/app
+      # -dev, not the runtime volume: mkdocs is in ReelScraper's dev dependency group.
+      - venv-reelscraper-dev:/app/ReelScraper/.venv
+    ports:
+      # Same rule as the hub. mkdocs serve has no authentication either, and it will happily
+      # serve the whole documentation tree to the LAN.
+      - "127.0.0.1:${DOCS_PORT:-8000}:8000"
+    environment:
+      # inotify does NOT propagate over VirtioFS (macOS) or 9p/drvfs (Windows), so mkdocs'
+      # watchdog observer sees nothing and `docsite`'s promise that "edits under
+      # documentation/docs/ rebuild automatically" becomes a lie. The tree is small, so
+      # polling is cheap.
+      WATCHDOG_FORCE_POLLING: "1"
+      TZ: ${TZ:-UTC}
+      HOME: /tmp
+      UV_CACHE_DIR: /tmp/uv-cache
+      XDG_CACHE_HOME: /tmp/.cache
+      # mkdocs lives in the dev group; with UV_OFFLINE=1 inherited from the image, a
+      # `uv run mkdocs` that needed to resolve anything would fail offline.
+      UV_OFFLINE: "0"
+      TCR_CONTAINER: "1"
+    tmpfs:
+      - /tmp:mode=1777,size=512m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    working_dir: /app/ReelScraper
+    # `docsite` hardcodes `mkdocs serve -a 127.0.0.1:$PORT`, which inside a container is
+    # unreachable through a published port for the same reason as the hub. Bypassed here by
+    # invoking mkdocs directly; the real fix is a DOCS_HOST env var in `docsite` — a source
+    # change owned elsewhere.
+    command: ["uv", "run", "mkdocs", "serve", "-f", "../documentation/mkdocs.yml", "-a", "0.0.0.0:8000"]
+    user: "${TCR_UID:-1000}:${TCR_GID:-1000}"
+    init: true
+
+volumes:
+  # Compose namespaces volumes by project name, so pinning COMPOSE_PROJECT_NAME (top of this
+  # file) is what keeps two checkouts from sharing these. Getting the project name wrong
+  # silently shares all four venvs and node_modules between clones — a failure mode with no
+  # analogue in the host lane.
+  #
+  # TWO SETS, and the split is a correctness requirement, not tidiness. A named volume is
+  # seeded from the image exactly once, by the first container to mount it. The runtime image
+  # builds its venvs with `uv sync --frozen --no-dev`; the dev image builds them with the dev
+  # groups. One shared set means whichever service runs first wins, and the loser runs against
+  # the wrong dependency set with UV_NO_SYNC=1 forbidding repair — either ./health with no
+  # pytest, or a shipped runtime container quietly carrying dev deps.
+  venv-reelscraper-runtime:
+  venv-analysisengine-runtime:
+  venv-autosearch-runtime:
+  venv-similarcontent-runtime:
+  venv-reelscraper-dev:
+  venv-analysisengine-dev:
+  venv-autosearch-dev:
+  venv-similarcontent-dev:
+  node-modules:

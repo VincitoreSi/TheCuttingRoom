@@ -1,6 +1,6 @@
 [project]
 name = "the-cutting-room"
-version = "1.0.0"
+version = "1.1.0"
 description = "Local short-form virality analysis pipeline — scrape, score, remember, serve. Backend agent + API hub + CLI."
 requires-python = ">=3.10"
 license = { text = "MIT" }

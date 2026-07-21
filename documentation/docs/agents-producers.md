@@ -3,7 +3,7 @@
 Producers are the agents that turn a blueprint into a posting proposal — and, if they declare a render surface, into the finished media. Today there is one: **SimilarContent**, a `kind:clone` agent that recreates a winning clip 1:1 and renders approved recipes into actual reels. Three more are planned from the same scaffold. This page documents the SPI (service provider interface) every producer must implement, walks through SimilarContent's full call sequence, and shows how to build a new producer with the copy-scaffold recipe.
 
 !!! note "Prerequisite reading"
-    This page assumes familiarity with the hub's REST contract ([API Reference](api-reference.md)) and the 7-stage pipeline ([Architecture](architecture.md)). The blueprint schema that producers consume is documented in [Agents: AnalysisEngine](agents-analysisengine.md).
+    This page assumes familiarity with the hub's REST contract ([API Reference](api-reference.md)) and the 8-stage pipeline ([Architecture](architecture.md)). The blueprint schema that producers consume is documented in [Agents: AnalysisEngine](agents-analysisengine.md).
 
 ## What a producer is
 
@@ -54,6 +54,9 @@ POST /api/producers/register
   "dir": "SimilarContent",
   "render_cmd": ["uv", "run", "cli.py", "render"],
 
+  "proposes": true,
+  "propose_cmd": ["uv", "run", "cli.py"],
+
   "config_schema": { "...": "..." },
   "secrets": [{ "name": "...", "env_var": "...", "required": true }],
   "workflow_stages": ["Queued", "Generating", "Self-eval", "Proposed", "Approved",
@@ -61,9 +64,20 @@ POST /api/producers/register
 }
 ```
 
+### Two capabilities, deliberately separate
+
+A producer can declare two independent launch capabilities. Both are optional, and a producer that only writes markdown by hand declares neither.
+
+| Capability | Fields | What it opts into | Cost |
+|---|---|---|---|
+| **Render** | `renderable`, `dir`, `render_cmd` | `POST /api/studio/{p}/{file}/render` — turn one approved proposal into a media file | **Paid.** Image-API credits per frame. Human-triggered only |
+| **Propose** | `proposes`, `dir`, `propose_cmd` | `POST /api/pipeline/{p}/propose` — the `propose` pipeline stage, and the last boundary the [cascade](api-reference.md#the-cascade) fires **unattended** | Free. Reads blueprints, writes markdown |
+
+They share `dir` and are otherwise independent. Keeping them apart is the point: if one flag granted both, a producer that only wanted to be proposable would have to declare itself renderable, and the free unattended trigger would be gated on — and able to grant — a paid capability. The hub enforces the split at the resolver (`_producer_dir(agent, capability=...)`).
+
 ### Declaring a render surface
 
-The three fields in the middle are what make a producer **renderable** — able to turn an approved proposal into an actual media file. They are optional; a producer that only writes markdown omits all three.
+The three render fields make a producer **renderable** — able to turn an approved proposal into an actual media file.
 
 | Field | Meaning |
 |---|---|
@@ -72,6 +86,20 @@ The three fields in the middle are what make a producer **renderable** — able 
 | `render_cmd` | The argv the hub executes there. Must start with an allowlisted launcher (`uv`, `python`, `python3`, `node`, `npm`), and every argument must match `^[A-Za-z0-9._/=:-]{1,120}$` with no absolute path and no `..`. |
 
 The hub hardcodes no producer name or path: it resolves the producer from the studio item's `agent` field, then reads these fields from that agent's registered manifest. Adding a second renderable producer needs no hub change.
+
+### Declaring a propose surface
+
+| Field | Meaning |
+|---|---|
+| `proposes` | `true` opts this producer into the `propose` stage and the cascade's propose boundary. |
+| `dir` | The same field, and the same direct-sibling rule, as the render surface. |
+| `propose_cmd` | The argv **prefix** the hub runs there. Same launcher allowlist and argument shape-check as `render_cmd`. |
+
+**`propose_cmd` is a prefix, not a command.** The hub appends `propose --platform <p>` itself and refuses to take the subcommand from the manifest — it even strips a trailing `propose` if one is spelled out. That is the whole security argument for this stage: `_validate_render_cmd` checks argv *shape*, not semantics, so a producer allowed to name its own subcommand could declare `["uv","run","cli.py","render"]` and reach a **paid** command through the free, unattended trigger. Registration is unauthenticated, so "free by construction" has to mean construction rather than the producer's honesty.
+
+**Exactly one producer may declare it.** Zero and several are both refused with a `409` rather than guessed — the cascade fires this unattended, and an unattended trigger that picks an agent at random is not a feature. Either reason surfaces as `propose_agent_problem` in `GET /api/cascade`, which is what an operator sees when the last boundary can never fire.
+
+An implementation should honour `--count N` (how many recipes one firing publishes — the cascade passes it) and offer a `--dry-run` that shows the picks and writes nothing.
 
 !!! warning "`render_cmd` is validated, not trusted"
     `POST /api/producers/register` is unauthenticated and `ProducerManifest` allows extra fields, so `render_cmd` is caller-supplied and ends up as argv for `subprocess.run`. The launcher allowlist and argument shape-check are the actual security boundary, not defence in depth — `dir` only pins the working directory, never the command. `shell=True` is never used. See `SECURITY.md` at the repo root.
@@ -180,6 +208,33 @@ A renderable producer declares its canvas in `config_schema`, so it is editable 
 
 !!! note "No width/height knob, deliberately"
     The canvas is derived from `aspect_ratio`, so the output can never be a size that disagrees with the aspect it claims to be.
+
+### Choosing what gets cloned: the ease gate
+
+`propose` ranks candidates by how *cheap* each winner is to remake, not only by how well it performed. That judgement is one function, `SimilarContent/engine/propose.py::score_ease`, scoring 0–100 on three continuous terms — fewer shots, shorter, less camera movement:
+
+```
+shots     45 / (1 + (n-1))            1 -> 45   2 -> 22.5   6 -> 7.5
+duration  30 * clamp((30 - d) / 25)   6s -> 28.8   9.4s -> 24.7   >=30s -> 0
+camera    20 * (static shots / shots with known camera data)
+```
+
+Every term is continuous on purpose: one extra shot, one extra second and one moving shot each cost something, so two genuinely different clips can never land on the same number. (They used to. The terms were bands, the shot band stopped at four, and on a real corpus of 6–7 shot ~10s reels *every* candidate scored exactly 40 against a gate of 55 — nothing ever cleared, and the run silently served "most viral" to someone who asked for "easiest to remake".)
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `ease_threshold` | `55` | Score at or above which a candidate is "easy enough". |
+| `ease_restore_to` | `null` | Where the threshold came from, recorded automatically when you lower it, so a restore has a target. |
+| `ease_auto_restore` | `false` | Opt in to letting a run hand the threshold back on its own. |
+| `backfill_order` | `virality` | When too few candidates clear the gate, whether the remainder is ranked by `virality` or by `ease`. |
+
+**The gate reports on itself.** Every run says what it did, in the terminal and as a structured `POST /api/logs` event — so a starved gate is something you see rather than something you infer:
+
+- *starved* — `0 of 15 candidates cleared ease >= 55 — best score was 52.18. Lower ease_threshold to 52 to rank by ease.` It never lowers anything itself.
+- *restore-ready* — `12 of 15 candidates now clear ease >= 55 — restore ease_threshold to 55.`
+
+!!! warning "Automation may only ever RAISE the threshold"
+    Only a human lowers the gate. A wrong restore costs a few easy picks and is visible and reversible in one edit; a wrong auto-*lowering* would quietly admit clips nobody would call easy, and every recipe would still look right. The raise is a `max()`, so a lower value is not representable in its output, and the write is a compare-and-set — a restore computed at run start cannot overwrite a threshold you moved while the run was fetching blueprints.
 
 ## Sequence: register → propose → gate → render
 
@@ -316,7 +371,7 @@ The hub downloads the media (yt-dlp if available, else a direct GET — never lo
 
 ## See also
 
-- [Architecture](architecture.md) — the 7-stage pipeline and component ownership
+- [Architecture](architecture.md) — the 8-stage pipeline and component ownership
 - [Agents: AnalysisEngine](agents-analysisengine.md) — how blueprints are generated
 - [Agents: AutoSearch](agents-autosearch.md) — the discovery-kind producer and its parallel gate
 - [Agents: Dashboard](agents-dashboard.md) — how the board renders producer lanes and the human gate

@@ -459,12 +459,66 @@ Stage jobs are launched generically and tracked as background subprocesses; the 
 | `GET /api/schedule` | Per-platform automatic-run settings, plus the derived `stages` and `next_run_at`. |
 | `PUT /api/schedule/{platform}` | `{enabled?, every_hours?, include_blueprints?}` — every field optional. |
 | `GET /api/cascade` | Per-platform cascading-heartbeat settings, with the boundary arithmetic already done — see [The cascade](#the-cascade). |
-| `PUT /api/cascade/{platform}` | `{enabled?, include_blueprints?, steps?, propose_count?}` — every field optional. |
+| `PUT /api/cascade/{platform}` | `{enabled?, include_blueprints?, scrape_count?, analyze_pct?, media_pct?, blueprint_pct?, propose_pct?, propose_count?}` — every field optional. |
 | `GET /api/events` | SSE stream — see below. |
+
+### The cascade
+
+The cascade is a background daemon tick (every 60s) that auto-triggers downstream stages
+as new data lands. It answers "how much new work?" with counters and watermarks rather than
+"when?" like the timer-based scheduler — each stage fires at most once per batch of input.
+
+Per-platform, stored in `config/pipeline_cascade.json` (gitignored — per-install state):
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `enabled` | bool | `false` | Master switch. Off by default — no data is ever read or counted while disabled. |
+| `include_blueprints` | bool | `false` | Whether `analysis-engine` (a paid API per clip) may fire unattended. Must be explicitly opted into. |
+| `scrape_count` | int | `250` | One batch: the amount of new raw material the whole chain is sized against. 1..5000. |
+| `analyze_pct` | int | `100` | How much of the scraped batch is expected to reach `analyze`. 1..100. |
+| `media_pct` | int | `60` | How much of the analyzed output is worth downloading. 1..100. |
+| `blueprint_pct` | int | `20` | How much of the downloaded media is worth a **paid** blueprint. 1..100. |
+| `propose_pct` | int | `20` | How many of those blueprints are worth proposing against. 1..100. |
+| `propose_count` | int | `3` | How many proposals `propose` publishes per fire, clamped to the number of new blueprints available. 1..25. |
+| `steps` | object | derived | **Read-only.** How much new input each boundary waits for, derived as `step[stage] = ceil(step[previous] * 100 / pct[stage])`. A `steps` key in a PUT body is ignored. |
+| `marks` | object | per-input-count | **Read-only.** Watermarks last consumed at: `analyze` counts raw scraped reels, `media` counts scored corpus rows, `analysis-engine` counts persisted mp4s, `propose` counts blueprints. Reset only by disabling/enabling. |
+
+Behaviour:
+
+- The tick is **serial per platform**: only the most-upstream due stage fires in one tick, so no
+  stage runs while another is rewriting its input. A manual run or `run-all` also blocks the cascade
+  (backpressure via `JOBS`).
+- `render` can never fire through the cascade — it is not in `CASCADE_STAGES`, no config key or
+  value can name it, and the PUT endpoint drops keys outside the allowlist. Costs money; stays
+  human-only.
+- Off-to-on **stamps marks** to current corpus counts, so enabling against an already-scraped corpus
+  does not fire four stages in immediate succession.
+- **A widening funnel is not expressible.** Because every percentage is at most 100, every
+  multiplier in the derivation is at least 1, so `steps` is always non-decreasing. "A downstream
+  stage must not fire more often than the one feeding it" is structural rather than validated —
+  there is no number you can type into the form that breaks it.
+- Unreadable config or corpus → **fail closed**: cascade disables itself. The tick never raises.
+
+`GET /api/cascade` returns a row per platform with derived fields already computed:
+
+```json
+{"instagram": {"enabled": false, "include_blueprints": false,
+               "scrape_count": 250, "analyze_pct": 100, "media_pct": 60,
+               "blueprint_pct": 20, "propose_pct": 20, "propose_count": 3,
+               "marks": {"analyze": 0, "media": 0, "analysis-engine": 0, "propose": 0},
+               "steps": {"analyze": 250, "media": 417, "analysis-engine": 2085, "propose": 10425},
+               "counts": {"analyze": 870, "media": 810, "analysis-engine": 405, "propose": 120},
+               "next_at": {"analyze": 250, "media": 417, "analysis-engine": 2085, "propose": 10425},
+               "due": ["analyze"], "stages": ["analyze", "media", "analysis-engine", "propose"],
+               "problem": null, "propose_agent": "similar-content", "propose_agent_problem": null}}
+```
+
+`PUT /api/cascade/{platform}` accepts any subset of the persisted fields above. `steps` and
+`marks` in the body are **silently ignored** — both are machine-owned.
 
 ### Job status vocabulary
 
-A job entry carries one of **five** statuses. The first four are unchanged; `stopped` is new.
+A job entry carries one of **five** statuses:
 
 | `status` | Meaning |
 |---|---|
@@ -625,4 +679,4 @@ Two smaller resource groups worth knowing about, referenced elsewhere in this re
 
 - [Architecture](architecture.md) — component ownership and on-disk storage layout behind this API.
 - [Agent Call Flows](architecture.md) — the exact sequence of calls each agent makes against this contract.
-- [Pipeline Stages](architecture.md) — how these endpoints compose into the 7-stage Discover → Studio pipeline.
+- [Pipeline Stages](architecture.md) — how these endpoints compose into the 8-stage Discover → Studio pipeline.

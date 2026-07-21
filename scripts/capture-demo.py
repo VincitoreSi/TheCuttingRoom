@@ -187,11 +187,17 @@ def main() -> int:
                   f"ReelScraper/platforms/{args.platform}/{name}", report)
 
     # 2. media — posters for the whole grid, video only for the analyzed clips
+    # Counted as they are copied, not assumed from --max-posters: that flag is a CAP on the
+    # top slice, and the corpus routinely has more rows than it has posters on disk. Reporting
+    # the cap made the manifest claim 2000 posters over a capture that shipped 104.
+    n_posters = 0
     media_src = HUB / "media" / args.platform
     if media_src.exists():
         for cid in sorted(poster_ids):
-            copy_into(media_src / f"{cid}.jpg",
-                      f"ReelScraper/media/{args.platform}/{cid}.jpg", report)
+            src = media_src / f"{cid}.jpg"
+            if src.exists():
+                n_posters += 1
+            copy_into(src, f"ReelScraper/media/{args.platform}/{cid}.jpg", report)
         for cid in sorted(keep):
             copy_into(media_src / f"{cid}.mp4",
                       f"ReelScraper/media/{args.platform}/{cid}.mp4", report)
@@ -215,7 +221,8 @@ def main() -> int:
         "platform": args.platform,
         "corpus": stats,
         "cloned_reels_with_source_video": len(keep),
-        "posters": args.max_posters,
+        "posters": n_posters,
+        "posters_cap": args.max_posters,
         "total_bytes": total,
         "excludes": ["platforms/*/reels_raw.json", "platforms/*/*.xlsx", "platforms/*/*.csv",
                      "media/*.mp4 except cloned clips", "*/.env", "*/session.txt",

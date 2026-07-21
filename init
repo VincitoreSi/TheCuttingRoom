@@ -28,6 +28,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+container_mode_guard init "./cr up"
+
 printf '\n  %sThe Cutting Room%s · first-run setup\n' "$_B" "$_R"
 
 # ---------------------------------------------------------------- 1. prerequisites
