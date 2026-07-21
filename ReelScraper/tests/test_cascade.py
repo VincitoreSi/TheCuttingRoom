@@ -1,16 +1,24 @@
 """The cascading heartbeat — work flowing down the pipeline on its own, in ratios.
 
 The scheduler asks "when should a whole run happen?" and answers with a clock. This asks
-"how much new work has landed?" and answers with a counter: every 40 new scraped reels an
-`analyze` fires, every 40 new scored rows a `media` fires, every 40 new clips a blueprint
-run fires (paid, opt-in), every 40 new blueprints three proposals are published — and then
+"how much new work has landed?" and answers with a counter: every N new scraped reels an
+`analyze` fires, every N new scored rows a `media` fires, every N new clips a blueprint
+run fires (paid, opt-in), every N new blueprints three proposals are published — and then
 it stops, at the human gate.
+
+The N per boundary is not typed in. The operator types a batch size (`scrape_count`) and a
+pass-through percentage per boundary, and the step chain is DERIVED from those — which is
+what makes "downstream never fires more often than upstream" structural rather than a rule
+the API has to police. The tests below mostly use a 1:1 funnel (a batch of 40, 100% through
+every boundary) so the number in the assertion is the number in the fixture.
 
 Everything below is about the four ways an unattended counter goes wrong: spending money
 nobody asked for, firing a burst instead of once, firing while something else owns the
 files, and silently skipping work because a watermark outlived the data it described.
 """
 import json
+import pathlib
+import re
 
 import pytest
 
@@ -18,12 +26,21 @@ import pytest
 PLATFORM = "instagram"
 
 
-def _cfg(hub, platform=PLATFORM, **fields):
-    """Write the cascade config by hand, the way an operator or an older build would."""
+def _funnel(**fields):
+    """A stored row whose funnel derives a step of 40 at every boundary — one batch of 40,
+    nothing tapered. Most tests here care about ONE boundary's arithmetic."""
     row = {"enabled": True, "include_blueprints": False,
-           "steps": {"analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40},
+           "scrape_count": 40, "analyze_pct": 100, "media_pct": 100,
+           "blueprint_pct": 100, "propose_pct": 100,
            "propose_count": 3,
            "marks": {"analyze": 0, "media": 0, "analysis-engine": 0, "propose": 0}}
+    row.update(fields)
+    return row
+
+
+def _cfg(hub, platform=PLATFORM, **fields):
+    """Write the cascade config by hand, the way an operator or an older build would."""
+    row = _funnel()
     for k, v in fields.items():
         if isinstance(v, dict) and isinstance(row.get(k), dict):
             row[k].update(v)
@@ -352,16 +369,21 @@ def test_blueprints_never_fire_unless_explicitly_opted_into(hub, launched, gemin
     {"stage": "render"},
     {"stages": ["render"]},
     {"render": True, "render_count": 99},
-    {"steps": {"analyze": 1, "media": 1, "analysis-engine": 1, "propose": 1},
-     "propose_count": 1},
+    {"render_pct": 100, "propose_count": 1},
+    {"scrape_count": 1, "analyze_pct": 100, "media_pct": 100, "blueprint_pct": 100,
+     "propose_pct": 100, "propose_count": 1},
 ])
 def test_no_configuration_can_make_the_cascade_fire_render(
         hub, launched, proposer, gemini_key, hostile):
     """THE test. `render` spends image-API credits per frame, and the entire promise of this
     feature is that it costs nothing. Three independent things have to hold: `render` is not
-    in CASCADE_STAGES, no config field names a stage, and `steps`/`marks` keys outside
-    CASCADE_STAGES are dropped on read rather than honoured. Delete this test and any one of
-    the three can quietly regress into a bill.
+    in CASCADE_STAGES, no config field names a stage, and `marks` keys outside CASCADE_STAGES
+    are dropped on read rather than honoured. Delete this test and any one of the three can
+    quietly regress into a bill.
+
+    The funnel model removed the one field that came closest to naming a stage — `steps` is
+    derived now — so a stored `steps.render` is doubly inert: dropped on read AND not an
+    input at all.
     """
     hostile = {"include_blueprints": True, **hostile}
     _cfg(hub, **hostile)
@@ -375,56 +397,144 @@ def test_no_configuration_can_make_the_cascade_fire_render(
 
     assert "render" not in hub.mod.CASCADE_STAGES
     assert [s for _, s, _ in launched if s == "render"] == []
-    assert "render" not in _on_disk(hub)[PLATFORM]["steps"]
+    assert "render" not in hub.mod._read_cascade()[PLATFORM]["steps"]
     assert "render" not in _on_disk(hub)[PLATFORM]["marks"]
+    assert list(hub.mod.CASCADE_PCTS) == hub.mod.CASCADE_STAGES
 
 
 def test_render_is_not_reachable_through_the_cascade_api_either(hub):
-    """The PUT model has no field that names a stage, and steps keys are filtered — so the
-    route cannot be talked into storing one either."""
+    """The PUT model has no field that names a stage at all now — `steps` is not an input,
+    so a body carrying one is ignored rather than filtered. The route cannot be talked into
+    storing a stage name either way."""
     r = hub.put(f"/api/cascade/{PLATFORM}",
-                json={"steps": {"render": 1, "analyze": 40, "media": 40,
+                json={"scrape_count": 40,
+                      "steps": {"render": 1, "analyze": 40, "media": 40,
                                 "analysis-engine": 40, "propose": 40}})
 
     assert r.status_code == 200, r.text
     assert "render" not in r.json()["steps"]
+    assert list(r.json()["steps"]) == hub.mod.CASCADE_STAGES
+    assert "render" not in _on_disk(hub)[PLATFORM]
 
 
-# ---------------------------------------------------------------- monotonicity
+# ---------------------------------------------------------------- the funnel
 
-def test_a_config_that_widens_the_funnel_is_refused_with_both_field_names(hub):
-    """A later stage firing more often than the one feeding it is the one arithmetic the
-    chain cannot express. It is REFUSED, not clamped: this is a human typing into a form,
-    and a silent clamp means the number they see afterwards is not the number they typed,
-    so they type it again."""
-    r = hub.put(f"/api/cascade/{PLATFORM}", json={"steps": {"analyze": 40, "media": 10}})
+@pytest.mark.parametrize("funnel,expected", [
+    # The shipped defaults: 250 reels, all analyzed, 60% worth downloading, 20% of those
+    # worth a paid blueprint, 20% of those worth proposing against.
+    ({"scrape_count": 250, "analyze_pct": 100, "media_pct": 60,
+      "blueprint_pct": 20, "propose_pct": 20},
+     {"analyze": 250, "media": 417, "analysis-engine": 2085, "propose": 10425}),
+    # Everything passes through: one batch, four times.
+    ({"scrape_count": 40, "analyze_pct": 100, "media_pct": 100,
+      "blueprint_pct": 100, "propose_pct": 100},
+     {"analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40}),
+    # Rounding is UP at every hop — 1 * 100/3 is 34, not 33. A step that rounded down would
+    # fire a boundary before a full batch's worth of input could possibly have reached it.
+    # And the last hop is clamped: 1,260,000 is a threshold no counter here ever crosses.
+    ({"scrape_count": 1, "analyze_pct": 3, "media_pct": 3,
+      "blueprint_pct": 3, "propose_pct": 3},
+     {"analyze": 34, "media": 1_134, "analysis-engine": 37_800, "propose": 1_000_000}),
+])
+def test_the_steps_are_the_ceil_chain_of_the_percentages(hub, funnel, expected):
+    """step[stage] = ceil(step[previous] * 100 / pct[stage]), anchored on scrape_count. The
+    operator says how much survives each boundary; the counter thresholds follow."""
+    assert hub.mod._cascade_steps(funnel) == expected
+
+    r = hub.put(f"/api/cascade/{PLATFORM}", json=funnel)
+    assert r.status_code == 200, r.text
+    assert r.json()["steps"] == expected
+
+
+@pytest.mark.parametrize("scrape_count", [1, 7, 250, 4_999, 5_000])
+@pytest.mark.parametrize("pcts", [(1, 1, 1, 1), (100, 100, 100, 100), (100, 60, 20, 20),
+                                  (3, 97, 50, 1), (99, 1, 100, 7), (50, 50, 50, 50),
+                                  (17, 83, 2, 61)])
+def test_the_steps_are_non_decreasing_for_every_funnel_the_api_accepts(
+        hub, scrape_count, pcts):
+    """THE structural property, and the reason the model changed. A downstream stage firing
+    more often than the one feeding it is the one arithmetic the chain cannot express; under
+    the old absolute steps it was reachable by typing two numbers and had to be REFUSED at
+    the boundary. Every pct is coerced into 1..100, so every multiplier is >= 1 — the funnel
+    can no longer be widened through the API at all, whatever is typed."""
+    analyze_pct, media_pct, blueprint_pct, propose_pct = pcts
+    r = hub.put(f"/api/cascade/{PLATFORM}", json={
+        "scrape_count": scrape_count, "analyze_pct": analyze_pct, "media_pct": media_pct,
+        "blueprint_pct": blueprint_pct, "propose_pct": propose_pct,
+        # The one boundary the percentages do NOT make structural has its own test; keep it
+        # out of the way so a 400 here can only ever mean the funnel itself was refused.
+        "propose_count": 1})
+
+    assert r.status_code == 200, r.text
+    steps = [r.json()["steps"][s] for s in hub.mod.CASCADE_STAGES]
+    assert steps == sorted(steps)
+    assert steps[0] >= 1
+    assert steps[-1] <= 1_000_000
+    assert r.json()["problem"] is None
+
+
+def test_an_absurd_funnel_is_clamped_rather_than_left_to_compound(hub):
+    """A chain of 1% compounds to 5 * 10^10 — an int Python is happy to hold and no counter
+    on this box will ever reach, which reads to an operator as silently broken rather than as
+    a number they typed."""
+    r = hub.put(f"/api/cascade/{PLATFORM}", json={
+        "scrape_count": 5_000, "analyze_pct": 1, "media_pct": 1,
+        "blueprint_pct": 1, "propose_pct": 1})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["steps"] == {"analyze": 500_000, "media": 1_000_000,
+                                 "analysis-engine": 1_000_000, "propose": 1_000_000}
+
+
+def test_a_stored_steps_from_an_older_build_is_ignored_and_then_dropped(hub, launched):
+    """`pipeline_cascade.json` is per-install state, so an upgrade finds a file written when
+    `steps` was an INPUT. It is neither migrated nor honoured — the funnel derives the chain —
+    and the stale key is dropped the next time the row is written, because a stored setting
+    that does nothing is worse than one that is gone."""
+    _cfg(hub, steps={"analyze": 1, "media": 1, "analysis-engine": 1, "propose": 1})
+    _reels(hub, 39)
+
+    assert hub.mod._read_cascade()[PLATFORM]["steps"] == {
+        "analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40}
+    assert hub.mod._cascade_tick() == []           # 39 new: the stored 1 is not in play
+
+    _reels(hub, 40)
+    assert hub.mod._cascade_tick() == [(PLATFORM, "analyze")]
+    assert "steps" not in _on_disk(hub)[PLATFORM]
+
+
+def test_a_propose_count_wider_than_its_boundary_is_refused_with_the_number(hub):
+    """The one funnel violation the percentages cannot make structural: `propose_count` is
+    its own field, so publishing 25 recipes off a boundary that fires every 2 new blueprints
+    still widens the last hop. REFUSED, not clamped: this is a human typing into a form, and
+    a silent clamp means the number they see afterwards is not the number they typed, so they
+    type it again."""
+    r = hub.put(f"/api/cascade/{PLATFORM}",
+                json={"scrape_count": 2, "analyze_pct": 100, "media_pct": 100,
+                      "blueprint_pct": 100, "propose_pct": 100, "propose_count": 25})
 
     assert r.status_code == 400
     detail = r.json()["detail"]
-    assert "media" in detail and "analyze" in detail
-
-    r = hub.put(f"/api/cascade/{PLATFORM}",
-                json={"propose_count": 25,
-                      "steps": {"analyze": 5, "media": 5, "analysis-engine": 5,
-                                "propose": 5}})
-    assert r.status_code == 400
-    assert "propose_count" in r.json()["detail"]
-    assert "steps.propose" in r.json()["detail"]
+    assert "propose_count" in detail and "2" in detail
 
 
 def test_a_refused_configuration_is_not_persisted(hub):
     """A 400 that had already written half the row would leave the stored settings in a
     state the operator never asked for and cannot see."""
-    hub.put(f"/api/cascade/{PLATFORM}", json={"steps": {"analyze": 40, "media": 10}})
+    hub.put(f"/api/cascade/{PLATFORM}",
+            json={"scrape_count": 2, "analyze_pct": 100, "media_pct": 100,
+                  "blueprint_pct": 100, "propose_pct": 100, "propose_count": 25})
 
-    assert hub.get("/api/cascade").json()[PLATFORM]["steps"]["media"] == 40
+    row = hub.get("/api/cascade").json()[PLATFORM]
+    assert row["scrape_count"] == 250            # the default, untouched
+    assert row["propose_count"] == 3
 
 
 def test_a_hand_edited_config_that_widens_the_funnel_disables_that_platform_and_says_why(
         hub, launched):
     """The rule is "any ambiguity = the chain is OFF". But not silently: GET reports the
     sentence, because a daemon that quietly stopped working is its own bug."""
-    _cfg(hub, steps={"media": 1})
+    _cfg(hub, scrape_count=2, propose_count=25)
     _reels(hub, 5_000)
     _corpus(hub, 5_000)
 
@@ -432,7 +542,7 @@ def test_a_hand_edited_config_that_widens_the_funnel_disables_that_platform_and_
 
     row = hub.get("/api/cascade").json()[PLATFORM]
     assert row["enabled"] is False
-    assert row["problem"] and "media" in row["problem"]
+    assert row["problem"] and "propose_count" in row["problem"]
 
 
 def test_a_healthy_config_reports_no_problem(hub):
@@ -444,12 +554,12 @@ def test_fixing_a_widened_funnel_brings_the_platform_back_on(hub, launched):
     persisted `enabled: false` by the very PUT that fixed the funnel: `problem` cleared,
     the toggle stayed off, and the sentence explaining why was gone — so the operator did
     the one thing the message told them to and the platform still would not run."""
-    _cfg(hub, steps={"media": 10})          # stored enabled, funnel widened by hand
+    _cfg(hub, scrape_count=2, propose_count=25)   # stored enabled, funnel widened by hand
     _reels(hub, 5_000)
     assert hub.mod._cascade_tick() == []
     assert hub.get("/api/cascade").json()[PLATFORM]["enabled"] is False
 
-    r = hub.put(f"/api/cascade/{PLATFORM}", json={"steps": {"media": 40}})
+    r = hub.put(f"/api/cascade/{PLATFORM}", json={"scrape_count": 40})
 
     assert r.status_code == 200, r.text
     assert r.json()["problem"] is None
@@ -461,7 +571,7 @@ def test_fixing_a_widened_funnel_brings_the_platform_back_on(hub, launched):
 def test_a_problem_row_offers_nothing_as_due(hub):
     """`due` is what the UI shows as about to happen. A row that refuses to run must not
     advertise work it will never start."""
-    _cfg(hub, steps={"media": 10})
+    _cfg(hub, scrape_count=2, propose_count=25)
     _reels(hub, 5_000)
 
     assert hub.get("/api/cascade").json()[PLATFORM]["due"] == []
@@ -474,34 +584,34 @@ def test_one_platforms_tick_does_not_rewrite_another_platforms_stored_settings(h
     rewrite."""
     d = hub.root / "config"
     d.mkdir(parents=True, exist_ok=True)
-    row = {"enabled": True, "include_blueprints": False,
-           "steps": {"analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40},
-           "propose_count": 3,
-           "marks": {"analyze": 0, "media": 0, "analysis-engine": 0, "propose": 0}}
-    widened = {**row, "steps": {**row["steps"], "media": 10}}
+    widened = _funnel(scrape_count=2, propose_count=25)
     (d / "pipeline_cascade.json").write_text(json.dumps(
-        {PLATFORM: row, "x": widened, "a-platform-a-newer-build-added": {"enabled": True}}))
+        {PLATFORM: _funnel(), "x": widened,
+         "a-platform-a-newer-build-added": {"enabled": True}}))
     _reels(hub, 40)
 
     assert hub.mod._cascade_tick() == [(PLATFORM, "analyze")]
 
     disk = _on_disk(hub)
     assert disk["x"]["enabled"] is True                    # the refusal stayed a report
-    assert disk["x"]["steps"]["media"] == 10               # ...and so did their number
+    assert disk["x"]["propose_count"] == 25                # ...and so did their number
+    assert disk["x"]["scrape_count"] == 2
     assert "a-platform-a-newer-build-added" in disk
 
 
 # ---------------------------------------------------------------- hand-edited files
 
 @pytest.mark.parametrize("route", ["get", "put"])
-def test_an_infinite_step_fails_closed_instead_of_500ing_the_panel(hub, launched, route):
+def test_an_infinite_funnel_number_fails_closed_instead_of_500ing_the_panel(
+        hub, launched, route):
     """json.loads maps `1e400` to float('inf'), and int(inf) raises OverflowError — an
     ArithmeticError, which slipped past a (TypeError, ValueError) handler. The tick survived
     on its own catch-all, but GET and PUT both 500ed: the cascade was silently dead and the
     operator could neither read `problem` nor switch the platform off through the UI."""
     (hub.root / "config").mkdir(parents=True, exist_ok=True)
     (hub.root / "config" / "pipeline_cascade.json").write_text(
-        '{"instagram": {"enabled": true, "steps": {"analyze": 1e400}}}', encoding="utf-8")
+        '{"instagram": {"enabled": true, "scrape_count": 1e400, "media_pct": 1e400}}',
+        encoding="utf-8")
 
     hub.mod._cascade_tick()                        # must not raise
     r = (hub.get("/api/cascade") if route == "get"
@@ -509,7 +619,9 @@ def test_an_infinite_step_fails_closed_instead_of_500ing_the_panel(hub, launched
 
     assert r.status_code == 200, r.text
     row = r.json() if route == "put" else r.json()[PLATFORM]
-    assert row["steps"]["analyze"] == 40           # the default, not infinity
+    assert row["scrape_count"] == 250              # the default, not infinity
+    assert row["media_pct"] == 60
+    assert row["steps"]["analyze"] == 250
     assert launched == []                          # nothing due: no corpus at all
 
 
@@ -543,7 +655,11 @@ def test_the_cascade_is_off_on_a_fresh_install(hub):
 
     assert row["enabled"] is False
     assert row["include_blueprints"] is False
-    assert row["steps"] == {"analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40}
+    assert row["scrape_count"] == 250
+    assert (row["analyze_pct"], row["media_pct"],
+            row["blueprint_pct"], row["propose_pct"]) == (100, 60, 20, 20)
+    assert row["steps"] == {"analyze": 250, "media": 417,
+                            "analysis-engine": 2_085, "propose": 10_425}
     assert row["propose_count"] == 3
 
 
@@ -638,7 +754,7 @@ def test_the_marks_are_machine_owned_and_ignored_on_put(hub):
     UI round-trip an old mark and re-fire a paid stage over a corpus already consumed."""
     _cfg(hub, marks={"analyze": 7})
 
-    r = hub.put(f"/api/cascade/{PLATFORM}", json={"steps": {"analyze": 40},
+    r = hub.put(f"/api/cascade/{PLATFORM}", json={"scrape_count": 40,
                                                  "marks": {"analyze": 0}})
 
     assert r.status_code == 200, r.text
@@ -670,13 +786,23 @@ def test_an_unknown_platform_is_a_404(hub):
     assert hub.put("/api/cascade/myspace", json={"enabled": True}).status_code == 404
 
 
-def test_a_step_below_one_is_clamped_rather_than_stored(hub):
-    """Field-level coercion, exactly like the scheduler's max(1.0, every_hours). A step of
-    zero would mean "fire on every tick forever"."""
-    r = hub.put(f"/api/cascade/{PLATFORM}", json={"steps": {"analyze": 0}})
+@pytest.mark.parametrize("body,expected", [
+    # A batch of zero would mean "fire on every tick forever"; 0% would mean an infinite step.
+    ({"scrape_count": 0, "media_pct": 0}, {"scrape_count": 1, "media_pct": 1}),
+    ({"scrape_count": -5, "analyze_pct": -5}, {"scrape_count": 1, "analyze_pct": 1}),
+    # Above 100% a boundary would produce more than it consumed, which is not a funnel.
+    ({"scrape_count": 99_999, "propose_pct": 400},
+     {"scrape_count": 5_000, "propose_pct": 100}),
+])
+def test_a_funnel_number_outside_its_range_is_clamped_rather_than_stored(
+        hub, body, expected):
+    """Field-level coercion, exactly like the scheduler's max(1.0, every_hours): scrape_count
+    into 1..5000, every percentage into 1..100."""
+    r = hub.put(f"/api/cascade/{PLATFORM}", json=body)
 
     assert r.status_code == 200, r.text
-    assert r.json()["steps"]["analyze"] == 1
+    assert {k: r.json()[k] for k in expected} == expected
+    assert {k: _on_disk(hub)[PLATFORM][k] for k in expected} == expected
 
 
 # ---------------------------------------------------------------- propose's count
@@ -778,3 +904,97 @@ def test_the_cascade_thread_is_started_at_startup(hub, monkeypatch):
     hub.mod._on_startup()
 
     assert "_cascade_loop" in started
+
+
+# ------------------------------------------------------- the Dashboard's half of it
+#
+# The funnel is edited in a browser, and the browser's copy of the rules is a separate
+# language the hub's suite cannot import. That gap is where THE bug in this feature lived
+# once already: the card PUT a field the model did not declare, pydantic dropped it, the
+# route answered 200, and nothing was persisted — a save that looked like it worked and
+# never did. TypeScript cannot see app.py and pytest cannot see the .ts, so neither side's
+# green suite says anything at all about the seam between them. These read the Dashboard
+# source as text and assert the two halves still describe the same funnel.
+#
+# They SKIP rather than fail when the Dashboard is not on disk: this package is meant to be
+# usable on its own, and a missing sibling directory is a legitimate checkout, not a defect.
+DASHBOARD_LIB = pathlib.Path(__file__).resolve().parents[2] / "Dashboard" / "src" / "lib"
+
+
+def _dashboard(name):
+    f = DASHBOARD_LIB / name
+    if not f.is_file():
+        pytest.skip(f"no Dashboard checkout at {DASHBOARD_LIB}")
+    return f.read_text(encoding="utf-8")
+
+
+def _ts_cascade_limits():
+    """The `CASCADE_LIMITS` table out of cascadeFunnel.ts, as {field: (min, max, default)}.
+
+    Read as text on purpose. A generated client would be the other answer, but it would
+    have to be regenerated by the same hand that broke the contract, and this failure mode
+    is precisely a change made on one side only."""
+    src = _dashboard("cascadeFunnel.ts")
+    body = re.search(r"CASCADE_LIMITS\s*=\s*\{(.*?)\n\}", src, re.S)
+    assert body, "cascadeFunnel.ts no longer declares CASCADE_LIMITS"
+    return {m["f"]: (int(m["lo"]), int(m["hi"]), int(m["def"]))
+            for m in re.finditer(
+                r"(?P<f>\w+):\s*\{\s*min:\s*(?P<lo>\d+),\s*max:\s*(?P<hi>\d+),"
+                r"\s*fallback:\s*(?P<def>\d+)\s*\}", body.group(1))}
+
+
+def test_the_card_and_the_hub_agree_on_every_bound_and_default(hub):
+    """Same numbers, both sides. The card clamps locally so the operator reads back what
+    they typed rather than a silent server-side correction — which only stays true while
+    the two tables match. A hub that lowered SCRAPE_COUNT_MAX would otherwise leave the
+    form happily accepting 5000 and the hub quietly storing something else."""
+    want = {"scrape_count": (1, hub.mod.SCRAPE_COUNT_MAX,
+                             hub.mod.CASCADE_DEFAULTS["scrape_count"]),
+            "propose_count": (1, hub.mod.PROPOSE_COUNT_MAX,
+                              hub.mod.CASCADE_DEFAULTS["propose_count"])}
+    for field in hub.mod.CASCADE_PCTS.values():
+        want[field] = (1, 100, hub.mod.CASCADE_DEFAULTS[field])
+
+    assert _ts_cascade_limits() == want
+
+
+def test_every_number_the_card_can_put_is_a_field_the_model_declares(hub):
+    """THE regression test for the original bug: a body key the model does not declare is
+    dropped by pydantic, the route answers 200, and the setting is silently not saved.
+    CASCADE_LIMITS is exactly the set of numbers the card PUTs, one field per commit."""
+    accepted = set(hub.mod.CascadeIn.model_fields)
+
+    assert set(_ts_cascade_limits()) <= accepted
+
+    # ...and the other direction, so a new number on the hub cannot stay unreachable: the
+    # two booleans are toggles, not numbers, and are not in the card's clamp table.
+    assert accepted - set(_ts_cascade_limits()) == {"enabled", "include_blueprints"}
+
+
+def test_every_field_the_card_reads_is_one_the_route_actually_returns(hub):
+    """The mirror of the above, on the GET. A field the card reads and the row does not
+    carry is `undefined` in a browser and NaN in the arithmetic below it — the card renders
+    "≤NaN clips", which points nowhere near the cause."""
+    src = _dashboard("types.ts")
+    body = re.search(r"export interface CascadeRow \{(.*?)\n\}", src, re.S)
+    assert body, "types.ts no longer declares CascadeRow"
+    declared = set(re.findall(r"^  (\w+)\??:", body.group(1), re.M))
+
+    assert declared == set(hub.get(f"/api/cascade").json()[PLATFORM])
+
+
+def test_the_card_names_no_stage_the_cascade_may_not_launch(hub):
+    """The render barrier, on the Dashboard's side of the wire. The card's own stage list
+    has to be the hub's, or a future row could offer a percentage for a boundary that
+    spends image credits — and the form would look like the place that was allowed to."""
+    stages = re.search(r"CASCADE_STAGES = \[(.*?)\]", _dashboard("types.ts"), re.S)
+    assert stages, "types.ts no longer declares CASCADE_STAGES"
+
+    assert re.findall(r'"([^"]+)"', stages.group(1)) == hub.mod.CASCADE_STAGES
+
+    # ...and the card's own row table names no boundary outside that list. Checked on the
+    # quoted literals rather than the whole file, so a comment saying "the card renders X"
+    # is not a failure — it is `key: "render"` in FUNNEL_ROWS that would be.
+    rows = re.search(r"FUNNEL_ROWS = \[(.*?)\n\] as const", _dashboard("cascadeFunnel.ts"), re.S)
+    assert rows, "cascadeFunnel.ts no longer declares FUNNEL_ROWS"
+    assert "render" not in re.findall(r'"([^"]+)"', rows.group(1))

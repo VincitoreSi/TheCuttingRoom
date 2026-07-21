@@ -132,13 +132,18 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
 
 /* ------------------------------------------------------------- RangeSlider
    A tailoring-flavored slider — the track is a tape segment, the thumb a
-   brass index. Sum-normalized weight editing uses this. */
+   brass index. Sum-normalized weight editing uses this.
+
+   `onChange` fires on every tick of the drag; `onCommit` fires once the operator lets
+   go (pointer up, key up, or focus leaving). Anything that writes to the hub wants the
+   second one — a slider wired straight to a PUT sends ninety of them per drag. */
 export function RangeSlider({
   value,
   min = 0,
   max = 1,
   step = 0.01,
   onChange,
+  onCommit,
   "aria-label": ariaLabel,
 }: {
   value: number;
@@ -146,9 +151,12 @@ export function RangeSlider({
   max?: number;
   step?: number;
   onChange: (v: number) => void;
+  onCommit?: (v: number) => void;
   "aria-label"?: string;
 }) {
   const pctPos = ((value - min) / (max - min)) * 100;
+  const commit = (e: { currentTarget: HTMLInputElement }) =>
+    onCommit?.(parseFloat(e.currentTarget.value));
   return (
     <input
       type="range"
@@ -160,6 +168,9 @@ export function RangeSlider({
       step={step}
       aria-label={ariaLabel}
       onChange={(e) => onChange(parseFloat(e.target.value))}
+      onPointerUp={onCommit && commit}
+      onKeyUp={onCommit && commit}
+      onBlur={onCommit && commit}
     />
   );
 }

@@ -103,13 +103,15 @@
 .board__vtape { display: none; }
 /* stretch (not center) so every node fills its cell's full height — the track
    already equalizes cell heights, and a stretched node lets the footer's
-   mt-auto pin the Run button to a shared baseline across all seven cells. */
+   mt-auto pin the Run button to a shared baseline across all eight cells. */
 .board__cell { display: flex; align-items: stretch; flex: 1 1 0; min-width: 0; }
 .board__cell > .stage-node { flex: 1 1 0; min-width: 0; }
 /* the last cell has no connector — reserve the same 32px gutter its siblings
-   give theirs, so all seven nodes render at exactly equal width. */
+   give theirs, so all eight nodes render at exactly equal width. */
 .board__cell:last-child > .stage-node { margin-right: 32px; }
-/* the Run button spans the card so all five stage cards share one CTA baseline. */
+/* the Run button spans the card so all six stage cards share one CTA baseline. It stays
+   ONE button — while running it becomes the stop control — because a second button in
+   this slot does not fit an eight-node track and clips out of the card. */
 .board__run { width: 100%; }
 /* the count string is mono and can run long (e.g. "1030 blueprints"); keep it
    on one line so it never wraps and shoves the action out of alignment. */
@@ -428,6 +430,54 @@
 .sum-pill { font-family: var(--font-mono); font-size: 11px; padding: 3px 8px; border-radius: 999px; }
 .sum-pill--ok { color: var(--sage-ink); background: var(--sage-wash); }
 .sum-pill--off { color: var(--amber); background: color-mix(in srgb, var(--amber) 14%, transparent); }
+
+/* the cascade funnel — five rows read top to bottom, a rail down the left with a
+   node per stage, the control in the middle, and what one cycle is expected to move
+   on the right. Same grid discipline as .weight-row above. */
+.funnel-row {
+  display: grid;
+  grid-template-columns: 22px 104px minmax(0, 1fr) 46px 108px;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 0;
+}
+.funnel-row__rail { position: relative; align-self: stretch; display: grid; place-items: center; }
+/* the rail runs the full height of every row so consecutive rows read as ONE line;
+   the first and last clip their half, giving the funnel a top and a bottom. */
+.funnel-row__rail::before {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--line-strong);
+}
+.funnel-row:first-child .funnel-row__rail::before { top: 50%; }
+.funnel-row:last-child .funnel-row__rail::before { bottom: 50%; }
+.funnel-row__dot {
+  position: relative;
+  width: 9px; height: 9px;
+  border-radius: 999px;
+  background: var(--brass);
+  /* a ring of the card's own ground, so the dot sits ON the rail rather than beside it */
+  box-shadow: 0 0 0 3px var(--surface);
+}
+.funnel-row__name { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; }
+.funnel-row__anchor { display: flex; align-items: center; gap: 8px; }
+.funnel-row__pct { font-family: var(--font-mono); font-size: 12px; text-align: right; color: var(--brass-ink); }
+.funnel-row__vol {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  text-align: right;
+  color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.funnel-row__unit { font-size: 11px; color: var(--ink-faint); margin-left: 4px; }
+/* the one boundary that spends money, in the one color reserved for the thread's
+   working end — marked always, not only when it is switched on. */
+.funnel-row--paid .funnel-row__dot { background: var(--oxblood); }
+/* ...and greyed when it is switched off, because then it does not fire at all. */
+.funnel-row--muted { opacity: 0.5; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip {
@@ -1041,6 +1091,7 @@
   .stat-tile__num { font-size: 32px; }
   .reel-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
   .weight-row { grid-template-columns: 110px 1fr 44px; gap: 8px; }
+  .funnel-row { grid-template-columns: 18px 76px minmax(0, 1fr) 38px 78px; gap: 8px; }
   .next-step { flex-direction: column; align-items: stretch; }
   .cadence-panel__row { flex-direction: column; align-items: flex-start; }
 }

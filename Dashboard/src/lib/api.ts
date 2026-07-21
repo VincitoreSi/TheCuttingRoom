@@ -3,6 +3,7 @@ import type {
   AgentConfigResponse,
   Blueprint,
   Candidate,
+  CascadeRow,
   ConfigResponse,
   EvalRecord,
   FactorsResponse,
@@ -195,10 +196,24 @@ export const api = {
   runStage: (p: string, stage: Stage) =>
     fetchJson<{ job_id: string }>(`/api/pipeline/${p}/${stage}`, { method: "POST" }),
 
+  stopStage: (p: string, stage: Stage) =>
+    fetchJson<{ job_id: string; signalled: boolean; halting_run: string | null }>(
+      `/api/pipeline/${p}/${stage}/stop`,
+      { method: "POST" },
+    ),
+
   runAll: (p: string) =>
     fetchJson<{ run_id: string; stages: string[] }>(`/api/pipeline/${p}/run-all`, {
       method: "POST",
     }),
 
   pipelineStatus: () => fetchJson<Record<string, unknown>>("/api/pipeline/status"),
+
+  cascade: () => fetchJson<Record<string, CascadeRow>>("/api/cascade"),
+
+  putCascade: (platform: string, body: Partial<CascadeRow>) =>
+    fetchJson<CascadeRow>(`/api/cascade/${platform}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
 };

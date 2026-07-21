@@ -141,6 +141,35 @@ manifest = {
                 "type": "boolean", "default": True,
                 "description": "If a schema_version:2 blueprint exists for the exemplar's content_id, use it as source of truth instead of re-deriving beats."
             },
+            # ---- the ease gate and its threshold lifecycle -------------------------------
+            # `propose` ranks easy-first; anything that does not clear `ease_threshold` can
+            # only arrive as virality backfill. On a corpus of 6-7 shot, ~10s reels the whole
+            # pool can sit just under the gate — so the run REPORTS what the gate did (how
+            # many cleared, the best score, what to lower it to), and these knobs are how you
+            # act on that. Lowering is a HUMAN act; the only change a run may make on its own
+            # is putting the threshold BACK (see ease_auto_restore).
+            "ease_threshold": {
+                "type": "integer", "default": 55, "minimum": 0, "maximum": 100,
+                "description": "Ease gate 0-100 (higher = easier to remake). Candidates scoring at or above this rank easy-first; the rest can only appear as backfill. A ~10s, 6-7 shot, fully-static reel scores ~51-52, a 2-shot 7s static clip ~70. A clip whose duration is unknown, or 30s or longer, is never 'easy' at any setting — shots + static alone total 65, so without that rule a 90s single-take would outrank every real candidate. If a run reports 0 of N cleared, lower this to the score it names."
+            },
+            # `type: integer` with a null default is deliberate: the Agent Desk renders an
+            # integer as a number input, which shows blank for null and yields null again
+            # when cleared — exactly the int-or-nothing behaviour this knob needs. Declaring
+            # `["integer", "null"]` instead drops it to a free-text box (see
+            # Dashboard/src/components/agent/AgentConfigForm.tsx), which is worse for a knob
+            # whose whole content is a number, and the Dashboard is out of scope here.
+            "ease_restore_to": {
+                "type": "integer", "default": None, "minimum": 0, "maximum": 100,
+                "description": "Where a lowered ease_threshold came from, so it can be put back (blank = nothing to restore). Recorded once, when the threshold is below the default and nothing is recorded yet, and cleared only by a restore that actually happened — a value you set here is never rewritten by a run. Automation may only ever RAISE the threshold to this value — lowering is a human act, because a wrong restore is visible (fewer easy picks) while a wrong lowering silently degrades every proposal."
+            },
+            "ease_auto_restore": {
+                "type": "boolean", "default": False,
+                "description": "When more than `top_n` candidates in the pool clear `ease_restore_to`, put ease_threshold back to it automatically. Off by default: the run reports that the corpus now supports the original threshold and changes nothing, so the first move is always yours. Even on, it only ever acts on a full scheduled run — never on one narrowed by --count/--top/--topic, and never in the same run that first recorded the target — and it abandons the write if ease_threshold changed in the hub while the run was scoring."
+            },
+            "backfill_order": {
+                "type": "string", "default": "virality", "enum": ["virality", "ease"],
+                "description": "How the remainder is ordered when too few candidates clear the ease gate. virality = the proven winners first (default). ease = the least-bad-to-remake first, when production cost matters more than the score."
+            },
             "fidelity_score_threshold": {
                 "type": "integer", "default": 85, "minimum": 0, "maximum": 100,
                 "description": "Self-eval gate: clone fidelity to the blueprint must meet this before publish (§10.2)."

@@ -1,6 +1,12 @@
 import { motion } from "framer-motion";
 import { useShell } from "../App";
-import { useRunStage, useAnalysis, useStudio, usePendingCandidates } from "../lib/hooks";
+import {
+  useRunStage,
+  useStopStage,
+  useAnalysis,
+  useStudio,
+  usePendingCandidates,
+} from "../lib/hooks";
 import { latestStageJob, stageSeamState } from "../lib/jobs";
 import { useLogStream, useNow, usePageVisible, useReducedMotion } from "../lib/hooks";
 import { activitySummary, liveStageIndex } from "../lib/activityModel";
@@ -11,14 +17,16 @@ import { sectionMotion } from "../lib/motion";
 import { Button } from "./ui";
 import { Seam } from "./Seam";
 import { AddPagesButton } from "./AddPagesButton";
-import { IconArrowRight, IconPlay, IconTape } from "./icons";
+import { IconArrowRight, IconPlay, IconStop, IconTape } from "./icons";
 import type { PlatformSummary, Stage, StageReadiness } from "../lib/types";
 import type { ViewKey } from "./Sidebar";
 import { cx } from "../lib/cx";
 
-/* Seven marks on the tape (§11). Sources & Studio are informational nodes;
+/* Eight marks on the tape (§11). Sources & Studio are informational nodes;
    the runnable stages the hub exposes are auto-search / scrape / analyze /
-   media / analysis-engine. The new Discover node (auto-search) sits FIRST —
+   media / analysis-engine / propose. `render` is deliberately NOT here — it
+   spends image credits and stays behind the human gate in the Studio. The new
+   Discover node (auto-search) sits FIRST —
    it's the new front door, feeding Sources via the gate → pages.txt. The
    Blueprint node (analysis-engine) sits after Media and is deliberately NOT
    called "Analyze" — that's the earlier virality-scoring stage.
@@ -75,6 +83,12 @@ const NODES: NodeDef[] = [
     cta: "Open desk",
   },
   {
+    key: "propose",
+    label: "Propose",
+    stage: "propose",
+    hint: "recipes to the gate (free)",
+  },
+  {
     key: "studio",
     label: "Studio",
     hint: "producers & gate",
@@ -92,6 +106,7 @@ export function PipelineBoard({
 }) {
   const { platform, jobs, connected, openAgent } = useShell();
   const run = useRunStage(platform);
+  const stop = useStopStage(platform);
   const now = useNow();
   const nowSec = now / 1000;
   const reduced = useReducedMotion();
@@ -159,7 +174,9 @@ export function PipelineBoard({
                 ? "done"
                 : job?.status === "error"
                   ? "error"
-                  : "idle";
+                  : job?.status === "stopped"
+                    ? "stopped"
+                    : "idle";
           const running = status === "running";
           // a node is clickable when it opens an agent desk, or (legacy) when it
           // links to a view and a navigator is available. `activate` picks the
@@ -237,8 +254,10 @@ export function PipelineBoard({
                     running={running}
                     elapsedText={job ? elapsed(job.started, job.ended, now) : "…"}
                     pending={run.isPending}
+                    stopping={stop.isPending}
                     readiness={summary?.readiness?.[node.stage]}
                     onRun={(s) => run.mutate(s)}
+                    onStop={(s) => stop.mutate(s)}
                   />
                 ) : node.addTo ? (
                   <AddPagesButton
@@ -302,22 +321,30 @@ function StageAction({
   running,
   elapsedText,
   pending,
+  stopping,
   readiness,
   onRun,
+  onStop,
 }: {
   stage: Stage;
   label: string;
   running: boolean;
   elapsedText: string;
   pending: boolean;
+  stopping: boolean;
   readiness?: StageReadiness;
   onRun: (s: Stage) => void;
+  onStop: (s: Stage) => void;
 }) {
   // No readiness yet (first paint, or an older hub) → behave exactly as before rather
   // than locking every button on a summary that has not loaded.
   const blocked = !running && readiness != null && !readiness.ready;
 
   if (!blocked) {
+    // ONE button in the bottom slot, whose meaning follows the state. A second, separate
+    // Stop button was tried and could not fit: the cells are `flex: 1 1 0` on an
+    // eight-node track, so two buttons clipped their own card. The running button is the
+    // stop control — the elapsed time is the label, and pressing it cuts the run.
     return (
       <Button
         variant={running ? "oxblood" : "outline"}
@@ -325,13 +352,20 @@ function StageAction({
         className="board__run mt-auto"
         onClick={(e) => {
           e.stopPropagation();
-          onRun(stage);
+          if (running) onStop(stage);
+          else onRun(stage);
         }}
-        disabled={running || pending}
-        title={running ? "Running…" : `Run ${label}`}
+        disabled={stopping || (!running && pending)}
+        title={running ? `Stop ${label}` : `Run ${label}`}
+        // explicit, because the visible label while running is a clock — without this it
+        // still announces as "Run" to a screen reader while it in fact stops the stage.
+        aria-label={running ? `Stop ${label}` : `Run ${label}`}
       >
         {running ? (
-          <span className="font-mono text-[11px]">{elapsedText}</span>
+          <>
+            <IconStop size={12} />
+            <span className="font-mono text-[11px]">{elapsedText}</span>
+          </>
         ) : (
           <>
             <IconPlay size={13} /> Run

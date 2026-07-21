@@ -31,6 +31,7 @@ export function stageSeamState(job: Job | undefined): SeamState {
   if (job.status === "running" || job.status === "queued") return "working";
   if (job.status === "done") return "done";
   if (job.status === "error") return "error";
+  if (job.status === "stopped") return "stopped";
   return "idle";
 }
 
@@ -68,6 +69,8 @@ export function agentState(jobs: Jobs, platform: string): AgentState {
       stage: latest.stage,
     };
   }
+  if (latest.status === "stopped")
+    return { state: "stopped", label: `Cut · ${latest.stage}`, stage: latest.stage };
   if (latest.status === "done")
     return { state: "done", label: `Knotted · ${latest.stage}`, stage: latest.stage };
   return { state: "idle", label: "Idle" };

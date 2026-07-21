@@ -4,7 +4,15 @@ import { api } from "./api";
 import { toastForError } from "./toasts";
 import { applyLogEvent } from "./agentBoard";
 import { renderProgress } from "./renderProgress";
-import type { AgentBoard, ConfigResponse, Jobs, LogEvent, ScheduleRow, Stage } from "./types";
+import type {
+  AgentBoard,
+  CascadeRow,
+  ConfigResponse,
+  Jobs,
+  LogEvent,
+  ScheduleRow,
+  Stage,
+} from "./types";
 
 /* ---------------- data queries ----------------
    New resources (producers, studio+status, audio, blueprints, logs, evals) are
@@ -124,6 +132,9 @@ export const useSecrets = (agent: string | null) =>
 export const useSchedule = () =>
   useQuery({ queryKey: ["schedule"], queryFn: api.schedule, refetchInterval: 60_000 });
 
+export const useCascade = () =>
+  useQuery({ queryKey: ["cascade"], queryFn: api.cascade, refetchInterval: 60_000 });
+
 /* ---------------- mutations ---------------- */
 
 export function useSaveSchedule(p: string) {
@@ -132,6 +143,15 @@ export function useSaveSchedule(p: string) {
     mutationFn: (body: Partial<ScheduleRow>) => api.putSchedule(p, body),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["schedule"] }),
     onError: (e) => toastForError("Could not save the schedule", e),
+  });
+}
+
+export function useSaveCascade(p: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Partial<CascadeRow>) => api.putCascade(p, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["cascade"] }),
+    onError: (e) => toastForError("Could not save cascade settings", e),
   });
 }
 
@@ -146,6 +166,17 @@ export function useRunStage(p: string) {
     // The hub refuses an unrunnable stage with a written reason. Without this the refusal
     // was discarded and the Run click looked like it had done nothing.
     onError: (e, stage) => toastForError(`Could not run ${stage}`, e),
+  });
+}
+
+export function useStopStage(p: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (stage: Stage) => api.stopStage(p, stage),
+    onSuccess: () => {
+      setTimeout(() => qc.invalidateQueries({ queryKey: ["platforms"] }), 1000);
+    },
+    onError: (e, stage) => toastForError(`Could not stop ${stage}`, e),
   });
 }
 
@@ -436,7 +467,7 @@ export function useInvalidateOnJobDone(jobs: Jobs, platform: string) {
   useEffect(() => {
     for (const [key, job] of Object.entries(jobs)) {
       if (job.platform !== platform) continue;
-      if (job.status !== "done" && job.status !== "error") continue;
+      if (job.status !== "done" && job.status !== "error" && job.status !== "stopped") continue;
       const stamp = `${key}:${job.ended ?? ""}:${job.status}`;
       if (seen.current.has(stamp)) continue;
       seen.current.add(stamp);
@@ -463,6 +494,10 @@ export function useInvalidateOnJobDone(jobs: Jobs, platform: string) {
         // enabled) can touch pages.txt — refresh both.
         qc.invalidateQueries({ queryKey: ["candidates", platform] });
         qc.invalidateQueries({ queryKey: ["config", platform] });
+      }
+      if (job.stage === "propose") {
+        // a propose run writes studio markdown — refresh the studio list
+        qc.invalidateQueries({ queryKey: ["studio", platform] });
       }
     }
   }, [jobs, platform, qc]);
