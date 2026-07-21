@@ -511,7 +511,7 @@ with **zero new UI code** (that is the pluggability the board already provides).
   `frontend-design` skill for the new view.
 
 ### 11.5 Verification
-Per `AutoSearch/PIPELINE.md §7`, all runnable WITHOUT a live IG session or Anthropic key: `status`; the weekly-
+Per `AutoSearch/PIPELINE.md §7`, all runnable WITHOUT a live IG session or any API key: `status`; the weekly-
 plan unit test (deterministic distribution + beat-gating); `synthetic` end-to-end (candidate → events → POST →
 board Proposed lane); guest `smoke` (assert no `sessionid`); hub roundtrip (POST → pending → approve→pages.txt
 append/dedupe/gate.jsonl → reject purge → 404/400); mocked-Claude unit test. Safety invariants asserted:

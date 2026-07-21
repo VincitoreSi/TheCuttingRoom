@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""tests/test_schema.py — offline schema self-test (no network, no hub, no Anthropic).
+"""tests/test_schema.py — offline schema self-test (no network, no hub, no LLM).
 
 Runnable two ways:
   * pytest:  `pytest -q`  (collects the `test_*` functions below)
@@ -8,8 +8,8 @@ Runnable two ways:
 Verifies (AutoSearch/PIPELINE.md §7.5):
   1. a good candidate payload (the pages.txt-matching full-URL `handle` form) validates.
   2. a bad candidate payload (bare-username handle, out-of-range score) is REJECTED.
-  3. a good/bad Claude term-expansion output validates/rejects.
-  4. a good/bad Claude relevance-scoring output validates/rejects.
+  3. a good/bad term-expansion output validates/rejects.
+  4. a good/bad relevance-scoring output validates/rejects.
   5. `candidate_id()` is stable/deterministic for the same (platform, handle).
 """
 from __future__ import annotations

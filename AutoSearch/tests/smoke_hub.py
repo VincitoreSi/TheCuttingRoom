@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tests/smoke_hub.py — live hub round-trip smoke test (AutoSearch/PIPELINE.md §7.5). No
-ANTHROPIC_API_KEY and no live IG session needed — only a running hub at BACKEND_API.
+no API key and no live IG session needed — only a running hub at BACKEND_API.
 
 Run:  uv run python -m tests.smoke_hub
 
@@ -73,8 +73,10 @@ def main() -> int:
 
     try:
         secrets = hub.secrets_status(AGENT_NAME)
-        anthropic_s = next((s for s in secrets if s.get("env_var") == "ANTHROPIC_API_KEY"), None)
-        check("GET secrets/status returns ANTHROPIC_API_KEY", anthropic_s is not None, str(secrets))
+        gem_s = next((s for s in secrets if s.get("env_var") == "GEMINI_API_KEY"), None)
+        check("GET secrets/status returns GEMINI_API_KEY", gem_s is not None, str(secrets))
+        check("GEMINI_API_KEY is declared OPTIONAL (discovery runs keyword-only by default)",
+              gem_s is not None and gem_s.get("required") is False, str(gem_s))
     except HubError as e:
         check("GET secrets/status", False, str(e))
 

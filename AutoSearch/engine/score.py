@@ -3,12 +3,15 @@
 (AutoSearch/PIPELINE.md §6 config_schema: min_followers, min_median_plays, relevance_threshold).
 
 Two layers, combined by cli.py into the candidate's `relevance={score, reasons}`:
-  * `heuristic_score()` — cheap, offline, always available (no Anthropic needed).
-  * Claude's `score_candidates()` (engine/claude.py) — optional, blended in when present.
+  * `heuristic_score()` — cheap, offline, always available. No API key, no network, no
+    credits — this is what discovery runs on by default.
+  * `score_candidates()` (engine/gemini.py) — optional LLM judgment, blended in when a
+    caller supplies one. NOT WIRED TODAY: engine/search.py passes None, so every candidate
+    is scored purely by the heuristic. See limits.LLM_RELEVANCE_WEIGHT.
 """
 from __future__ import annotations
 
-from engine.limits import CLAUDE_RELEVANCE_WEIGHT, HEURISTIC_RELEVANCE_WEIGHT
+from engine.limits import HEURISTIC_RELEVANCE_WEIGHT, LLM_RELEVANCE_WEIGHT
 
 
 def passes_gates(profile: dict, cfg: dict) -> bool:
@@ -26,8 +29,9 @@ def passes_gates(profile: dict, cfg: dict) -> bool:
 
 
 def heuristic_score(profile: dict, cfg: dict) -> tuple[float, list[str]]:
-    """A cheap 0-1 signal from public metadata alone — no Anthropic call needed. Used
-    standalone when ANTHROPIC_API_KEY is absent, and blended with Claude's judgment
+    """A cheap 0-1 signal from public metadata alone — no LLM call, no key, no credits.
+    This is the ONLY scorer in the production path today; it would be blended with an LLM
+    judgment
     otherwise (see combine_relevance)."""
     score = 0.0
     reasons: list[str] = []
@@ -59,13 +63,16 @@ def heuristic_score(profile: dict, cfg: dict) -> tuple[float, list[str]]:
     return max(0.0, min(1.0, round(score, 3))), reasons
 
 
-def combine_relevance(heuristic: tuple[float, list[str]], claude_score: float | None,
-                      claude_reasons: list[str] | None) -> dict:
-    """Blend the offline heuristic with Claude's relevance judgment (when available)
-    into the final `relevance={score, reasons}` block posted to the hub."""
+def combine_relevance(heuristic: tuple[float, list[str]], llm_score: float | None,
+                      llm_reasons: list[str] | None) -> dict:
+    """Blend the offline heuristic with an LLM relevance judgment into the final
+    `relevance={score, reasons}` block posted to the hub.
+
+    `llm_score=None` is the normal path and returns the heuristic untouched — which is what
+    every production call site passes today."""
     h_score, h_reasons = heuristic
-    if claude_score is None:
+    if llm_score is None:
         return {"score": h_score, "reasons": h_reasons}
-    combined = round(HEURISTIC_RELEVANCE_WEIGHT * h_score + CLAUDE_RELEVANCE_WEIGHT * claude_score, 3)
-    reasons = list(claude_reasons or []) + h_reasons
+    combined = round(HEURISTIC_RELEVANCE_WEIGHT * h_score + LLM_RELEVANCE_WEIGHT * llm_score, 3)
+    reasons = list(llm_reasons or []) + h_reasons
     return {"score": combined, "reasons": reasons}

@@ -24,7 +24,8 @@ against the hub's live `/openapi.json` at `http://127.0.0.1:8787`.
   `http://127.0.0.1:8787`). Never import ReelScraper or any sibling's code. Never write into another
   project's directory. AutoSearch is, alongside ReelScraper, the **only** agent permitted to touch Instagram —
   and only read-only, guest-first, burner-opt-in (see §1 SAFETY). Producers never scrape.
-- **Environment:** `BACKEND_API` (hub URL), `ANTHROPIC_API_KEY` (required — term expansion + relevance
+- **Environment:** `BACKEND_API` (hub URL), `GEMINI_API_KEY` (OPTIONAL — term expansion only, and
+  only when `term_expansion_enabled` is true; relevance
   scoring), `IG_SESSIONID` (optional burner, login-gated surfaces only). Secrets from env / gitignored `.env`
   or `session.txt` only.
 
@@ -159,8 +160,8 @@ observable pattern is sporadic, low-volume, human-hours browsing — no scripted
 AutoSearch/
   CLAUDE.md                 # identity + SAFETY (§1 verbatim) + cadence (§2) + run/beat contract + memory model
   cli.py                    # `run <platform>` | `beat <platform>` | `synthetic <platform>` | `smoke` | `status`
-  pyproject.toml            # name="auto-search"; [project.scripts] auto-search="cli:main"; deps: anthropic, jsonschema
-  .env.example              # ANTHROPIC_API_KEY=  IG_SESSIONID=(optional burner)  BACKEND_API=http://127.0.0.1:8787
+  pyproject.toml            # name="auto-search"; [project.scripts] auto-search="cli:main"; deps: jsonschema (no LLM SDK — Gemini over stdlib urllib)
+  .env.example              # GEMINI_API_KEY=(optional)  IG_SESSIONID=(optional burner)  BACKEND_API=http://127.0.0.1:8787
   .gitignore                # .env, session.txt, *_raw.json, logs/, __pycache__/, memory/caps/, memory/plan.json
   engine/
     __init__.py             # __version__, AGENT_NAME="auto-search"
@@ -171,7 +172,7 @@ AutoSearch/
     search.py               # topsearch (burner), discover/chaining (burner), term→surface orchestration, caps, resume
     plan.py                 # weekly-plan generation/reload (§2a), daily ledger, beat-gating logic (§2b)
     score.py                # heuristic signals (followers, median_plays, cadence) + threshold gates
-    claude.py               # anthropic.Anthropic; expand_terms() + score_candidates() (messages.create + output_config json_schema)
+    gemini.py               # Gemini REST over stdlib urllib; expand_terms() + score_candidates() (generateContent + responseSchema)
     memory.py               # markdown memory: system_prompt.base, <platform>/notes, trending.md
     schema.py               # jsonschema validators for the 2 Claude outputs + the candidate payload
     circuit.py              # CircuitBreaker(max_strikes=3, pace_seconds) + CircuitTripped  (verbatim ae pattern)
@@ -189,7 +190,7 @@ manifest). `Proposed/Approved/Rejected/Queued` match the Dashboard's `stageTone`
 `platform=<p>`, `run_id`, and per-item `content_id=<candidate_id>`:
 1. **run.start** (after idempotent `register_producer` so config/secrets/board resolve).
 2. Pull niche + keywords from `GET /api/config/agent/auto-search` + `GET /api/corpus/{p}/factors` + insights.
-3. Term expansion (Anthropic §5) — no per-item events.
+3. Term expansion (Gemini §5) — OFF by default; no per-item events.
 4. Per raw candidate: `item.start data.stage=Queued` → `item.stage Searching` → `item.stage Scoring`.
 5. Candidate posted (`POST /api/discovery/{p}`) → `item.done data={stage:"Proposed", score:<relevance>}`.
 6. Human approves/rejects → hub `gate.jsonl` → board gate-join moves the item to Approved/Rejected (AutoSearch
@@ -201,10 +202,16 @@ In **beat** mode the same events fire, just a few items per beat — the board s
 
 ---
 
-## 5. Anthropic usage (`engine/claude.py`)
-`anthropic.Anthropic()` (zero-arg; `ANTHROPIC_API_KEY` from env). Model from config, default
-`claude-opus-4-8`. Both call points use `client.messages.create(..., output_config={"format":{"type":
-"json_schema","schema":{…}}})` — **omit `thinking`** (cheapest/lowest-latency for bounded extraction).
+## 5. Gemini usage (`engine/gemini.py`) — OPTIONAL
+Gated behind `term_expansion_enabled` (config, default **false**) AND a resolvable key
+(`GEMINI_API_KEY` / `GEMINI_KEY` / `GOOGLE_API_KEY`) — the flag is checked FIRST, so a key
+exported for a sibling agent never silently bills discovery. Model from config, default
+`gemini-2.5-flash` — Flash, not Pro: this is bounded JSON extraction over a few hundred tokens,
+and the call only happens because an operator opted into spending. Both call points POST
+`:generateContent` with `generationConfig.responseMimeType="application/json"` and a
+`responseSchema` (stripped of the JSON-Schema keywords Gemini's subset rejects —
+`additionalProperties` there makes the API 400). `engine/schema.py` still validates the result:
+a model honouring a schema is not the same as a model being correct.
 - **Term expansion** (1 call/run): niche + seed keywords + factors + prior trending insight → schema
   `{keywords[], hashtags[], audio_terms[]}` (all `additionalProperties:false`, `required`).
 - **Relevance scoring** (batched, ~10 candidates/call): niche + compact candidate list → schema
@@ -235,9 +242,10 @@ In **beat** mode the same events fire, just a few items per beat — the board s
     "pacing_seconds":         {"type":"number","default":6.0,"minimum":0,"description":"Min gap between paced actions (floors in §1 win)"},
     "guest_only":             {"type":"boolean","default":true,"description":"true = never use the burner; guest surfaces only"},
     "discovery_enabled":      {"type":"boolean","default":false,"description":"Kill-switch. false = agent + hub scheduler idle"},
-    "model":                  {"type":"string","default":"claude-opus-4-8"}
+    "term_expansion_enabled": {"type":"boolean","default":false,"description":"Spend Gemini credits to widen seed keywords. false = keyword search only"},
+    "model":                  {"type":"string","default":"gemini-2.5-flash"}
   } },
-  "secrets": [ {"name":"anthropic_api_key","env_var":"ANTHROPIC_API_KEY","required":true},
+  "secrets": [ {"name":"gemini_api_key","env_var":"GEMINI_API_KEY","required":false},
                {"name":"ig_sessionid","env_var":"IG_SESSIONID","required":false} ] }
 ```
 Secrets declared by NAME only (never values). `discovery_enabled` defaults **false** — discovery (and the hub
@@ -245,23 +253,27 @@ scheduler) stay idle until the operator turns it on.
 
 ---
 
-## 7. Verification (works WITHOUT a live IG session or Anthropic key)
-1. **`uv run cli.py status`** — hub health + secret status (ANTHROPIC absent/present, IG absent), prints the
+## 7. Verification (works WITHOUT a live IG session or any API key)
+1. **`uv run cli.py status`** — hub health + secret status (GEMINI absent/present — optional, IG absent), prints the
    guest-only banner when no session.
 2. **Plan unit test (`tests/test_plan.py`)** — a fixed seed yields a plan whose day-targets sum ≈
    `weekly_search_budget`, has exactly `active_days_per_week` active days, no day > ~35% of the week, rest days
    `target:0`, windows inside `active_hours`; the beat-gate no-ops on rest days / out-of-window / over-cap /
    probability, and acts otherwise (with a stubbed clock + RNG).
 3. **`uv run cli.py synthetic <platform>`** — fabricate N candidates (`discovered_via="synthetic"`, precomputed
-   relevance, no network/Anthropic), drive the full event + POST path; assert each lands in `candidates.json`
+   relevance, no network, no LLM), drive the full event + POST path; assert each lands in `candidates.json`
    `status=pending` and the Agent Desk board shows items in the Proposed lane.
 4. **`uv run cli.py smoke`** — guest bootstrap only (assert no `sessionid`) + one `web_profile_info` hydration
    of a known public handle; in CI an injected fake transport returns canned JSON.
 5. **Hub roundtrip (`tests/`)** — POST a candidate; GET `/pending` shows it `in_pages=false`; approve →
    `appended_to_pages=true` + handle in `pages.txt` (comments/order preserved) + `gate.jsonl` record; second
    approve → `appended=false` (idempotent); reject → no `pages.txt` mutation + purge; 404/400 edge cases.
-6. **claude.py unit test** — mocked client asserts `messages.create(model=claude-opus-4-8, output_config.format.
-   type="json_schema", no thinking)` and that 429/5xx drive `CircuitBreaker` (3 strikes → CircuitTripped).
+6. **gemini.py unit test** — injected fake transport asserts the request targets
+   `:generateContent` for the configured model, asks for JSON with a stripped `responseSchema`,
+   never puts the key in the body, and that 429/5xx drive `CircuitBreaker` (3 strikes →
+   CircuitTripped). **expansion-gate unit test** — asserts NO client is constructed when
+   `term_expansion_enabled` is false even with a key present (the default-costs-nothing
+   contract), and that one IS constructed when both are set.
 
 **Safety invariants asserted:** with `guest_only=true`/no session, topsearch/chaining are skipped with a log
 and the run still completes via guest hydration; AutoSearch never writes into `ReelScraper/` (only via hub

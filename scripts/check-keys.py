@@ -38,8 +38,7 @@ TIMEOUT = 15
 
 # Where each key lives, and what this project does with it.
 KEY_SOURCES = {
-    "GEMINI_API_KEY": ["AnalysisEngine/.env", "SimilarContent/.env"],
-    "ANTHROPIC_API_KEY": ["AutoSearch/.env"],
+    "GEMINI_API_KEY": ["AnalysisEngine/.env", "SimilarContent/.env", "AutoSearch/.env"],
     "NVIDIA_API_KEY": ["SimilarContent/.env"],
     "HF_TOKEN": ["SimilarContent/.env"],
 }
@@ -47,7 +46,6 @@ KEY_SOURCES = {
 # Models the agents are configured to call. Auth alone is not enough — a key scoped to a
 # project without image generation authenticates fine and then fails at render time.
 GEMINI_MODELS = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-image"]
-ANTHROPIC_MODELS = ["claude-opus-4-8"]
 
 _C = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
 G, Y, E, D, R = (("\033[32m", "\033[33m", "\033[31m", "\033[2m", "\033[0m") if _C
@@ -148,32 +146,6 @@ def check_gemini(key: str) -> Result:
     return Result("OK", f"valid · {len(names)} models, all required ones present")
 
 
-def check_anthropic(key: str) -> Result:
-    try:
-        status, body = _get("https://api.anthropic.com/v1/models?limit=100",
-                            {"x-api-key": key, "anthropic-version": "2023-06-01"})
-    except (urllib.error.URLError, OSError, ssl.SSLError) as e:
-        return Result("UNREACHABLE", "could not reach Anthropic", str(e))
-
-    if status in (401, 403):
-        return Result("BAD", "rejected by Anthropic (invalid or revoked)", _api_message(body))
-    if status != 200:
-        return Result("BAD", f"unexpected HTTP {status}", _api_message(body))
-
-    try:
-        names = [m.get("id", "") for m in json.loads(body).get("data", [])]
-    except (ValueError, AttributeError):
-        return Result("OK", "valid (model list unreadable)")
-
-    missing = _missing_models(names, ANTHROPIC_MODELS)
-    if missing:
-        # Not fatal: the model is configurable on the agent's desk, unlike Gemini's image
-        # endpoint which the render path hardcodes.
-        return Result("OK", "valid, but " + ", ".join(missing) + " is not available",
-                      "pick another model on the Auto Search desk")
-    return Result("OK", f"valid · {len(names)} models, {ANTHROPIC_MODELS[0]} available")
-
-
 def check_nvidia(key: str) -> Result:
     """NVIDIA needs a POST, because its /v1/models is UNAUTHENTICATED.
 
@@ -230,9 +202,8 @@ def _api_message(body: bytes) -> str:
 
 CHECKS = {
     "gemini": ("GEMINI_API_KEY", check_gemini, True,
-               "blueprints (AnalysisEngine), captions and image rendering (SimilarContent)"),
-    "anthropic": ("ANTHROPIC_API_KEY", check_anthropic, False,
-                  "creator discovery (AutoSearch)"),
+               "blueprints (AnalysisEngine), captions and image rendering (SimilarContent), "
+               "and optional term expansion for discovery (AutoSearch)"),
     "nvidia": ("NVIDIA_API_KEY", check_nvidia, False,
                "FLUX image provider (SimilarContent) — only if you switch off nano_banana"),
     "huggingface": ("HF_TOKEN", check_hf, False, "Hugging Face image models (optional)"),

@@ -4,7 +4,7 @@ ReelScraper convention, PIPELINE.md §1.4 / AutoSearch/PIPELINE.md §1 rule 4).
 
 Stops after N consecutive failures (default 3) so a bad key, a rate-limited surface, or a
 hub outage doesn't burn the whole run/beat. A success resets the strike count. Also
-provides a pacer so paced actions (Anthropic calls, hub writes) never fire faster than
+provides a pacer so paced actions (Gemini calls, hub writes) never fire faster than
 `pace_seconds` apart — a courtesy floor, separate from the stricter §1.3 IG pacing floors
 enforced in engine/ig.py.
 """

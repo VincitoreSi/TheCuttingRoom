@@ -5,7 +5,9 @@ description = "AutoSearch — the pipeline's discovery agent: finds new Instagra
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "anthropic>=0.68",
+    # No LLM SDK. engine/gemini.py talks to the REST API over stdlib urllib, the same
+    # choice AnalysisEngine makes — and term expansion is optional, so an operator running
+    # keyword-only discovery installs nothing they will not use.
     "jsonschema>=4.21",
 ]
 
