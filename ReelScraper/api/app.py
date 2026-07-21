@@ -40,6 +40,16 @@ class ConfigUpdate(BaseModel):
     pages: Optional[list[str]] = None             # pages.txt lines
 
 
+class ScheduleIn(BaseModel):
+    """Automatic run settings for one platform. Every field optional so the UI can toggle
+    one thing without resending the rest."""
+    enabled: Optional[bool] = None
+    every_hours: Optional[float] = None
+    # analysis-engine spends API credits per clip; unattended, that adds up. Off unless
+    # the operator explicitly asks for it.
+    include_blueprints: Optional[bool] = None
+
+
 class Proposal(BaseModel):
     """A studio item written by a producer agent.
 
@@ -336,6 +346,12 @@ def _on_startup():
     except Exception as e:
         # must never block/fail startup — discovery is strictly opt-in
         log.error("failed to start discovery heartbeat scheduler", extra={"err": str(e)})
+    try:
+        threading.Thread(target=_schedule_loop, daemon=True).start()
+        log.info("pipeline schedule thread started (idle unless a platform is enabled)")
+    except Exception as e:
+        # same rule as discovery: a scheduler must never be able to block startup
+        log.error("failed to start pipeline scheduler", extra={"err": str(e)})
 
 # ---------------- helpers ----------------
 def pdir(platform):
@@ -1910,6 +1926,13 @@ def run_all(platform):
     inside a single supervising daemon thread. Returns immediately; per-stage progress shows up
     in the existing JOBS dict (so /api/pipeline/status + /api/events reflect it unchanged). A
     non-zero stage halts the sequence."""
+    stages = list(RUN_ALL_STAGES)
+    return {"run_id": _start_run_all(platform, stages), "stages": stages}
+
+
+def _start_run_all(platform, stages, trigger="manual"):
+    """Claim the platform and start a supervising thread. Shared by the route and the
+    scheduler so both get the same in-flight guard and the same readiness refusal."""
     if platform not in PLATFORMS:
         raise HTTPException(404, f"unknown platform {platform}")
     # One run per platform. A second click used to start a second supervisor over the same
@@ -1921,19 +1944,20 @@ def run_all(platform):
     try:
         # Refuse a run that cannot get past its first stage, with the reason the stage
         # itself would have given — rather than spawning it to fail four seconds later.
-        ready = stage_readiness(platform).get(RUN_ALL_STAGES[0], {})
+        ready = stage_readiness(platform).get(stages[0], {})
         if not ready.get("ready", True):
             raise HTTPException(409, ready.get("reason") or "the pipeline is not ready to run")
         with _JOB_SEQ_LOCK:
             run_id = f"{platform}:run-all:{int(time.time())}"
-        stages = list(RUN_ALL_STAGES)
-        threading.Thread(target=_run_all_supervisor, args=(platform, run_id, stages),
+        threading.Thread(target=_run_all_supervisor, args=(platform, run_id, list(stages)),
                          daemon=True).start()
     except BaseException:
         with _RUNNING_ALL_LOCK:      # the supervisor never started, so it cannot clear this
             _RUNNING_ALL.discard(platform)
         raise
-    return {"run_id": run_id, "stages": stages}
+    log.info("run-all launched", extra={"platform": platform, "run_id": run_id,
+                                        "stages": list(stages), "trigger": trigger})
+    return run_id
 
 
 # ---- the catch-all, LAST ------------------------------------------------------------
@@ -1965,6 +1989,145 @@ def run_stage(platform, stage, force: bool = False):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"job_id": job_id}
+
+
+# ---------------- scheduled pipeline runs ----------------
+# The hub has to be running for any of this to fire — there is no daemon outside it, by
+# design (everything is local-first, $0, no cron dependency). A schedule is therefore a
+# best-effort "while you have this open", not a guarantee, and the UI says so.
+def _schedule_file():
+    """Resolved per call, not bound at import: ROOT is repointed at a tmp dir by the test
+    fixture (and could be by any embedder), and a module-level constant would keep writing
+    to the developer's real config — which is exactly what it did until a test caught it."""
+    return ROOT / "config" / "pipeline_schedule.json"
+
+# Free stages only. analysis-engine calls a paid API on every clip, and this runs
+# UNATTENDED — the same reasoning that already keeps `render` out of RUN_ALL_STAGES.
+# Including it is a deliberate opt-in per platform.
+SCHEDULED_STAGES_FREE = ["scrape", "analyze", "media"]
+SCHEDULE_DEFAULTS = {"enabled": False, "every_hours": 24,
+                     "include_blueprints": False, "last_run_at": 0}
+_SCHEDULE_LOCK = threading.Lock()
+
+
+def _read_schedule():
+    """Fail-closed read of the whole schedule map. ANY problem resolves to disabled — a
+    scheduler must never turn itself on because a file was unreadable."""
+    try:
+        raw = _read_json(_schedule_file(), {})
+        if not isinstance(raw, dict):
+            raw = {}
+    except Exception as e:
+        log.warning("schedule unreadable, failing closed", extra={"err": str(e)})
+        raw = {}
+    out = {}
+    for p in PLATFORMS:
+        row = raw.get(p) if isinstance(raw.get(p), dict) else {}
+        merged = {**SCHEDULE_DEFAULTS, **row}
+        try:
+            merged["every_hours"] = max(1.0, float(merged["every_hours"] or 24))
+        except (TypeError, ValueError):
+            merged["every_hours"] = 24.0
+        merged["enabled"] = bool(merged["enabled"])
+        merged["include_blueprints"] = bool(merged["include_blueprints"])
+        try:
+            merged["last_run_at"] = float(merged.get("last_run_at") or 0)
+        except (TypeError, ValueError):
+            merged["last_run_at"] = 0.0
+        out[p] = merged
+    return out
+
+
+def _write_schedule(sched):
+    f = _schedule_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(sched, indent=2), encoding="utf-8")
+
+
+def scheduled_stages(row):
+    return list(SCHEDULED_STAGES_FREE) + (["analysis-engine"] if row["include_blueprints"] else [])
+
+
+@app.get("/api/schedule")
+def get_schedule():
+    """Per-platform automatic run settings, with `next_run_at` derived so the UI never has
+    to recompute the interval arithmetic."""
+    sched = _read_schedule()
+    for p, row in sched.items():
+        row["stages"] = scheduled_stages(row)
+        row["next_run_at"] = (row["last_run_at"] + row["every_hours"] * 3600
+                              if row["enabled"] and row["last_run_at"] else None)
+    return sched
+
+
+@app.put("/api/schedule/{platform}")
+def put_schedule(platform, body: ScheduleIn):
+    if platform not in PLATFORMS:
+        raise HTTPException(404, f"unknown platform {platform}")
+    with _SCHEDULE_LOCK:
+        sched = _read_schedule()
+        row = sched[platform]
+        if body.enabled is not None:
+            # Enabling starts the clock now, so turning it on does not immediately fire a
+            # run off a stale (or zero) last_run_at.
+            if body.enabled and not row["enabled"]:
+                row["last_run_at"] = time.time()
+            row["enabled"] = bool(body.enabled)
+        if body.every_hours is not None:
+            row["every_hours"] = max(1.0, float(body.every_hours))
+        if body.include_blueprints is not None:
+            row["include_blueprints"] = bool(body.include_blueprints)
+        _write_schedule(sched)
+    log.info("schedule updated", extra={"platform": platform, **{k: row[k] for k in
+             ("enabled", "every_hours", "include_blueprints")}})
+    return get_schedule()[platform]
+
+
+def _schedule_tick(now=None):
+    """One pass. Returns the platforms it started, so the loop and the tests can both see
+    what happened without reading logs."""
+    now = now or time.time()
+    started = []
+    with _SCHEDULE_LOCK:
+        sched = _read_schedule()
+        due = [p for p, r in sched.items()
+               if r["enabled"] and now - r["last_run_at"] >= r["every_hours"] * 3600]
+        # Stamp BEFORE launching: a run that takes an hour must not come due again while
+        # it is still going, and a crash mid-run must not re-fire on the next tick.
+        for p in due:
+            sched[p]["last_run_at"] = now
+        if due:
+            _write_schedule(sched)
+    for p in due:
+        row = sched[p]
+        ready = stage_readiness(p).get(SCHEDULED_STAGES_FREE[0], {})
+        if not ready.get("ready", True):
+            # Nothing to scrape. Skip quietly rather than starting a run that exists only
+            # to fail — the clock has already moved on, so this does not spin.
+            log.info("scheduled run skipped", extra={"platform": p, "why": ready.get("reason")})
+            continue
+        try:
+            run_id = _start_run_all(p, scheduled_stages(row), trigger="schedule")
+            started.append(p)
+            log.info("scheduled run started", extra={"platform": p, "run_id": run_id})
+        except HTTPException as e:
+            # 409 = one already in flight. Expected when a manual run overlaps a schedule.
+            log.info("scheduled run not started", extra={"platform": p, "detail": e.detail})
+        except Exception as e:
+            log.error("scheduled run failed to start", extra={"platform": p, "err": str(e)})
+    return started
+
+
+def _schedule_loop():
+    """Background daemon. Ticks every few minutes; the interval arithmetic lives in
+    last_run_at (persisted), not in how long this sleeps — so restarting the hub neither
+    re-fires a run nor loses the schedule. Never raises into the caller."""
+    while True:
+        try:
+            _schedule_tick()
+        except Exception as e:
+            log.error("schedule loop error (staying idle)", extra={"err": str(e)})
+        time.sleep(300 * (1.0 + random.uniform(-0.1, 0.1)))
 
 
 # ---------------- discovery heartbeat scheduler + kill-switch (PIPELINE.md §11.1/§11.2) ----------------

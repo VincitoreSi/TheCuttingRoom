@@ -4,7 +4,7 @@ import { api } from "./api";
 import { toastForError } from "./toasts";
 import { applyLogEvent } from "./agentBoard";
 import { renderProgress } from "./renderProgress";
-import type { AgentBoard, ConfigResponse, Jobs, LogEvent, Stage } from "./types";
+import type { AgentBoard, ConfigResponse, Jobs, LogEvent, ScheduleRow, Stage } from "./types";
 
 /* ---------------- data queries ----------------
    New resources (producers, studio+status, audio, blueprints, logs, evals) are
@@ -114,7 +114,19 @@ export const useSecrets = (agent: string | null) =>
     enabled: !!agent,
   });
 
+export const useSchedule = () =>
+  useQuery({ queryKey: ["schedule"], queryFn: api.schedule, refetchInterval: 60_000 });
+
 /* ---------------- mutations ---------------- */
+
+export function useSaveSchedule(p: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Partial<ScheduleRow>) => api.putSchedule(p, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["schedule"] }),
+    onError: (e) => toastForError("Could not save the schedule", e),
+  });
+}
 
 export function useRunStage(p: string) {
   const qc = useQueryClient();

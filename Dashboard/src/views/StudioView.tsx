@@ -21,6 +21,8 @@ import { humanizeAgent } from "../lib/agents";
 import { extractSection, firstHeading } from "../lib/proposalMarkdown";
 import { indexRenders, joinRenders } from "../lib/renderJoin";
 import type { RenderRow } from "../lib/renderJoin";
+import { AddPagesCta } from "../components/AddPagesButton";
+import type { ViewKey } from "../components/Sidebar";
 import { cx } from "../lib/cx";
 import type { FrameProgress } from "../lib/renderProgress";
 import type { Jobs, Proposal } from "../lib/types";
@@ -36,7 +38,7 @@ function gateClass(status?: string): string {
 
 type Tab = "proposals" | "renders";
 
-export function StudioView() {
+export function StudioView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
   const { platform, jobs } = useShell();
   const studioQ = useStudio(platform);
   const rendersQ = useRenders(platform);
@@ -129,6 +131,7 @@ export function StudioView() {
           icon={<IconStudio size={30} />}
           title="The table is clear"
           hint="No proposals yet. A producer agent reads the corpus through the hub and writes drafts here — then you approve the one to render."
+          action={<AddPagesCta onNavigate={onNavigate} />}
         />
       ) : (
         <div className="flex flex-col gap-6">

@@ -20,6 +20,8 @@ import { ChalkCircle } from "../components/ChalkCircle";
 import { LiftRow, ConfidenceDot } from "../components/LiftRow";
 import { IconInsights } from "../components/icons";
 import { sectionMotion } from "../lib/motion";
+import { AddPagesCta } from "../components/AddPagesButton";
+import type { ViewKey } from "../components/Sidebar";
 import { cx } from "../lib/cx";
 import {
   drags,
@@ -34,7 +36,7 @@ import {
 } from "../lib/playbookModel";
 import type { Factor, Insight } from "../lib/types";
 
-export function PlaybookView() {
+export function PlaybookView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
   const { platform } = useShell();
   const factorsQ = useFactors(platform);
   const insightsQ = useInsights();
@@ -231,6 +233,7 @@ export function PlaybookView() {
               icon={<IconInsights size={28} />}
               title={`No corpus for ${platform} yet`}
               hint="Run Analyze to score clips — factors appear once there's a scored sample."
+              action={<AddPagesCta onNavigate={onNavigate} />}
             />
           </Card>
         ) : (

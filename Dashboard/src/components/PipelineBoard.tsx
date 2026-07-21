@@ -9,10 +9,10 @@ import { elapsed } from "../lib/format";
 import { sectionMotion } from "../lib/motion";
 import { Button } from "./ui";
 import { Seam } from "./Seam";
+import { AddPagesButton } from "./AddPagesButton";
 import { IconArrowRight, IconPlay, IconTape } from "./icons";
 import type { PlatformSummary, Stage, StageReadiness } from "../lib/types";
 import type { ViewKey } from "./Sidebar";
-import { requestConfigFocus } from "../lib/nav";
 import { cx } from "../lib/cx";
 
 /* Seven marks on the tape (§11). Sources & Studio are informational nodes;
@@ -243,20 +243,13 @@ export function PipelineBoard({
                     readiness={summary?.readiness?.[node.stage]}
                     onRun={(s) => run.mutate(s)}
                   />
-                ) : node.addTo && onNavigate ? (
-                  <Button
+                ) : node.addTo ? (
+                  <AddPagesButton
+                    onNavigate={onNavigate}
+                    label={node.addTo.label}
                     variant="outline"
-                    size="sm"
                     className="board__run mt-auto"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      requestConfigFocus(node.addTo!.focus);
-                      onNavigate(node.addTo!.view);
-                    }}
-                    title="Open the watchlist in Config and add an Instagram handle"
-                  >
-                    {node.addTo.label} <IconArrowRight size={12} />
-                  </Button>
+                  />
                 ) : clickable ? (
                   <span className="board__link-hint eyebrow mt-auto">
                     {node.cta ?? "Open"} <IconArrowRight size={12} />

@@ -148,6 +148,9 @@ ReelScraper/evals/*.jsonl
 
 # Per-agent runtime config, written by the hub and edited from the Dashboard.
 ReelScraper/config/agents/
+# Automatic-run settings, incl. a last_run_at timestamp. Per-install state, not a shared
+# default — committing it would hand every clone somebody else's schedule and clock.
+ReelScraper/config/pipeline_schedule.json
 
 # ---- the demo dataset ships SEPARATELY, never in the repo ----
 # demo-data/data/ holds REAL scraped Instagram data (handles, captions, metrics, derived

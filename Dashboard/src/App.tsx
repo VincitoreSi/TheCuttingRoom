@@ -82,12 +82,12 @@ export function App() {
                 {view === "dashboard" && <Dashboard onNavigate={setView} />}
                 {view === "discover" && <DiscoveryView />}
                 {view === "corpus" && <Corpus onNavigate={setView} />}
-                {view === "sounds" && <SoundsView />}
-                {view === "proposals" && <StudioView />}
+                {view === "sounds" && <SoundsView onNavigate={setView} />}
+                {view === "proposals" && <StudioView onNavigate={setView} />}
                 {view === "producers" && <ProducersView />}
                 {view === "activity" && <ActivityView />}
                 {view === "evals" && <EvalsView onNavigate={setView} />}
-                {view === "playbook" && <PlaybookView />}
+                {view === "playbook" && <PlaybookView onNavigate={setView} />}
                 {view === "config" && <ConfigView />}
                 {view === "agent" && selectedAgent && <AgentBoardView name={selectedAgent} />}
               </ErrorBoundary>

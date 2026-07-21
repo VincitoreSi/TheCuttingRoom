@@ -1,8 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useShell } from "../App";
-import { useConfig, useReducedMotion, useSaveConfig } from "../lib/hooks";
-import { Button, Card, Eyebrow, Input, SectionHead, Switch } from "../components/ui";
+import {
+  useConfig,
+  useReducedMotion,
+  useSaveConfig,
+  useSaveSchedule,
+  useSchedule,
+} from "../lib/hooks";
+import { Button, Card, Eyebrow, Input, SectionHead, Select, Switch } from "../components/ui";
 import { RangeSlider } from "../components/ui";
 import { IconCheck, IconPin, IconX } from "../components/icons";
 import { KeysAndModels } from "../components/config/KeysAndModels";
@@ -21,6 +27,9 @@ const WEIGHT_LABELS: Record<string, string> = {
 export function ConfigView() {
   const { platform } = useShell();
   const configQ = useConfig(platform);
+  const scheduleQ = useSchedule();
+  const sched = scheduleQ.data?.[platform];
+  const saveSchedule = useSaveSchedule(platform);
   const save = useSaveConfig(platform);
   const reduced = useReducedMotion();
 
@@ -260,6 +269,65 @@ export function ConfigView() {
               </div>
             ))}
           </div>
+        </Card>
+      </motion.div>
+
+      {/* automatic runs */}
+      <motion.div {...sectionMotion(4, reduced)}>
+        <Card className="p-5">
+          <SectionHead
+            eyebrow="Automatic runs"
+            title="Run the pipeline on a timer"
+            right={
+              <Switch
+                checked={sched?.enabled ?? false}
+                onChange={(v) => saveSchedule.mutate({ enabled: v })}
+                label="Enable automatic runs"
+              />
+            }
+          />
+          <p className="text-[13px] text-[var(--ink-dim)] mb-3">
+            Runs scrape → analyze → media on a repeat.{" "}
+            <strong>Only while the hub is running</strong> — there is no background service outside
+            it, so this is best-effort, not a guarantee. The interval is measured from the last run
+            and survives a restart.
+          </p>
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-[13px] text-[var(--ink-dim)]">Every</label>
+            <Select
+              value={String(sched?.every_hours ?? 24)}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                saveSchedule.mutate({ every_hours: Number(e.target.value) })
+              }
+              aria-label="How often to run"
+              disabled={!sched?.enabled}
+            >
+              <option value="6">6 hours</option>
+              <option value="12">12 hours</option>
+              <option value="24">day</option>
+              <option value="72">3 days</option>
+              <option value="168">week</option>
+            </Select>
+            {sched?.next_run_at ? (
+              <Eyebrow>next · {new Date(sched.next_run_at * 1000).toLocaleString()}</Eyebrow>
+            ) : null}
+          </div>
+          <label className="flex items-start gap-2 mt-3 text-[13px] text-[var(--ink-dim)]">
+            <input
+              type="checkbox"
+              checked={sched?.include_blueprints ?? false}
+              disabled={!sched?.enabled}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                saveSchedule.mutate({ include_blueprints: e.target.checked })
+              }
+              className="mt-[3px]"
+            />
+            <span>
+              Also generate blueprints. <strong>Costs API credits on every run</strong> — the
+              analysis stage calls Gemini once per clip. Off by default for the same reason
+              rendering is never automatic.
+            </span>
+          </label>
         </Card>
       </motion.div>
 

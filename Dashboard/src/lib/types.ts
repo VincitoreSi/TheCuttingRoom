@@ -541,3 +541,17 @@ export interface Job {
 
 // SSE /api/events streams the whole JOBS dict, keyed "platform:stage:seq".
 export type Jobs = Record<string, Job>;
+
+/** Automatic run settings for one platform.
+
+    There is no daemon outside the hub, so this only fires while the hub is running — it is
+    a best-effort "while you have this open", not a cron guarantee, and the UI says so.
+    `include_blueprints` is opt-in because that stage calls a paid API on every clip. */
+export interface ScheduleRow {
+  enabled: boolean;
+  every_hours: number;
+  include_blueprints: boolean;
+  last_run_at: number;
+  stages: Stage[];
+  next_run_at: number | null;
+}

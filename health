@@ -196,6 +196,8 @@ if [ "$IS_GIT" -eq 1 ]; then
            "ReelScraper/renders/instagram/abc123/reel.mp4" \
            "ReelScraper/renders/index.json" \
            "ReelScraper/studio/instagram/x.md" \
+           "ReelScraper/config/agents/auto-search.json" \
+           "ReelScraper/config/pipeline_schedule.json" \
            "demo-data/manifest.json" \
            "demodataset.zip"; do
     checked=$((checked+1))

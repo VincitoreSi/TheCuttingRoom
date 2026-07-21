@@ -7,6 +7,7 @@ import { Button, Card, EmptyState, Eyebrow, Input, Select } from "../components/
 import { IconCorpus, IconPlay, IconSearch } from "../components/icons";
 import { grouped } from "../lib/format";
 import { recordScore } from "../lib/evalModel";
+import { AddPagesButton } from "../components/AddPagesButton";
 import { deriveCorpusEmpty } from "../lib/corpusEmpty";
 import type { Factor, Reel } from "../lib/types";
 import type { ViewKey } from "../components/Sidebar";
@@ -200,10 +201,8 @@ export function Corpus({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
                     <IconPlay size={14} />
                     {runStage.isPending ? "Running…" : `Run ${empty.run}`}
                   </Button>
-                ) : empty.goto && onNavigate ? (
-                  <Button variant="primary" size="sm" onClick={() => onNavigate(empty.goto!)}>
-                    Open Config
-                  </Button>
+                ) : empty.goto ? (
+                  <AddPagesButton onNavigate={onNavigate} />
                 ) : null
               }
             />

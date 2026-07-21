@@ -14,6 +14,7 @@ import type {
   Reel,
   ReferenceItem,
   RenderRecord,
+  ScheduleRow,
   SecretStatus,
   Stage,
   TrendingSound,
@@ -129,6 +130,13 @@ export const api = {
     fetchJson<AgentBoard>(
       `/api/agents/${encodeURIComponent(name)}/board${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`,
     ),
+  schedule: () => fetchJson<Record<string, ScheduleRow>>("/api/schedule"),
+  putSchedule: (platform: string, body: Partial<ScheduleRow>) =>
+    fetchJson<ScheduleRow>(`/api/schedule/${platform}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+
   agentConfig: (agent: string) => fetchJson<AgentConfigResponse>(`/api/config/agent/${agent}`),
   putAgentConfig: (agent: string, config: Record<string, unknown>) =>
     fetchJson<{ ok: boolean } & Record<string, unknown>>(`/api/config/agent/${agent}`, {

@@ -6,6 +6,8 @@ import { Badge, Card, EmptyState, Eyebrow, Input, SectionHead, Select } from "..
 import { CopyButton } from "../components/CopyButton";
 import { IconExternal, IconSearch, IconSound } from "../components/icons";
 import { compact, score } from "../lib/format";
+import { AddPagesCta } from "../components/AddPagesButton";
+import type { ViewKey } from "../components/Sidebar";
 import { cx } from "../lib/cx";
 import { safeUrl } from "../lib/url";
 import type { TrendingSound } from "../lib/types";
@@ -23,7 +25,7 @@ function bucketMuted(bucket: string): boolean {
   return bucket.toLowerCase().includes("saturat");
 }
 
-export function SoundsView() {
+export function SoundsView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
   const { platform } = useShell();
   const trendingQ = useTrending(platform);
   const [q, setQ] = useState("");
@@ -92,6 +94,7 @@ export function SoundsView() {
           icon={<IconSound size={28} />}
           title="No sounds tracked yet"
           hint="Scrape and persist media to extract the audio each reel uses; rising sounds surface here."
+          action={<AddPagesCta onNavigate={onNavigate} />}
         />
       ) : rows.length === 0 ? (
         <EmptyState
