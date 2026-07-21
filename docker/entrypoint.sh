@@ -293,25 +293,79 @@ GRACE="${TCR_STOP_GRACE:-100}"
 
 _sleeper=""
 
+# ------------------------------------------------------------------------------------------
+# WHO IS *NOT* THE HUB: PID 1, this shell, and EVERY ANCESTOR OF THIS SHELL.
+#
+# The ancestor walk is not defensive programming, it is a MEASURED bug fix. An earlier version
+# skipped only PID 1 and $$, on the reasoning that "in a PID namespace, everything except tini
+# and this shell is the hub plus its stages". That reasoning is wrong the moment anyone uses
+# the configuration this project actually ships. docker-compose.yml sets `init: true`, so the
+# runtime injects docker-init as PID 1 — and the image's OWN ENTRYPOINT tini is then just
+# another process. Observed process table in a running container (docker run --init):
+#
+#     pid=1  docker-init      <- skipped (PID 1)
+#     pid=7  tini             <- OUR PARENT, and it never exits while we are alive
+#     pid=8  tcr-entrypoint   <- $$, skipped
+#     pid=26 python           <- the hub
+#
+# tini at pid 7 was counted as a live stage. `docker stop` therefore burned the ENTIRE grace
+# period and then SIGKILLed a container whose hub had already exited cleanly two seconds in —
+# measured: hub "Application shutdown complete" at t+2s, "still running after 100s — SIGKILL"
+# at t+100s, container exit code 137. The cooperative-shutdown machinery this whole section
+# exists for was inverted into a guaranteed hard kill, and the log blamed an SSE tab for it.
+#
+# Ancestors are by construction neither the hub nor a stage (the hub is our CHILD), so
+# skipping the whole chain is correct under every init topology: tini as PID 1 (bare
+# `docker run`), docker-init + tini (`--init` / `init: true`), or a future third wrapper.
+# ------------------------------------------------------------------------------------------
+
+# Read a pid's /proc stat WITHOUT forking. $(cat ...) would spawn a subshell + a cat per
+# probe, and those transient pids show up in exactly the enumeration we are trying to read.
+# Sets $_stat to the fields AFTER the parenthesised comm, so $1=state $2=ppid once split.
+_read_stat() {
+  # shellcheck disable=SC2162
+  read _stat < "/proc/$1/stat" 2>/dev/null || return 1
+  _stat=${_stat##*) }
+  return 0
+}
+
+_ancestor_pids() {
+  p=$$
+  while [ -n "$p" ] && [ "$p" != 0 ] && [ "$p" != 1 ]; do
+    printf '%s ' "$p"
+    _read_stat "$p" || break
+    # shellcheck disable=SC2086
+    set -- $_stat            # $1 = state, $2 = ppid
+    p=$2
+  done
+  printf '1 '
+}
+# Computed ONCE, before any signal is sent. Leading/trailing spaces make the membership test
+# below a plain substring match.
+SKIP=" $(_ancestor_pids)"
+
+_skip_pid() {
+  case "$SKIP" in *" $1 "*) return 0 ;; esac
+  [ -n "${_sleeper:-}" ] && [ "$1" = "$_sleeper" ] && return 0
+  return 1
+}
+
 # A zombie still has a /proc entry, and the hub is our own child, so it WILL be a zombie
 # between its exit and our `wait`. Counting it as alive would burn the entire grace period
 # every single time. The third whitespace-separated field of /proc/<pid>/stat is the state
 # character; field 2 is the parenthesised comm, so strip through the last ") ".
 _is_zombie() {
-  s=$(cat "/proc/$1/stat" 2>/dev/null) || return 0    # gone between glob and read
-  s=${s##*) }
-  case "$s" in Z*) return 0 ;; esac
+  _read_stat "$1" || return 0                         # gone between glob and read
+  case "$_stat" in Z*) return 0 ;; esac
   return 1
 }
 
-# Is anything alive besides PID 1 (tini), this shell, and the `sleep` we are waiting on?
+# Is anything alive besides our own ancestry and the `sleep` we are waiting on?
 # /proc rather than ps, because procps is deliberately not installed in the runtime image.
 _others_alive() {
   for d in /proc/[0-9]*; do
     p=${d#/proc/}
-    case "$p" in
-      1|"$$"|"${_sleeper:-x}") continue ;;
-    esac
+    _skip_pid "$p" && continue
     [ -d "$d" ] || continue
     _is_zombie "$p" || return 0
   done
@@ -320,13 +374,14 @@ _others_alive() {
 
 _nap() { sleep 1 & _sleeper=$!; wait "$_sleeper" 2>/dev/null || true; _sleeper=""; }
 
-# _signal_all <SIGNAME> — signal every process in this namespace except PID 1 and ourselves.
+# _signal_all <SIGNAME> — signal every process in this namespace except our own ancestry.
+# Signalling an ancestor is not merely useless: TERM to tini makes tini forward TERM back to
+# us, and we have already disarmed our own handler, so it lands as a plain ignored signal on
+# the one process that must survive to do the escalation.
 _signal_all() {
   for d in /proc/[0-9]*; do
     p=${d#/proc/}
-    case "$p" in
-      1|"$$"|"${_sleeper:-x}") continue ;;
-    esac
+    _skip_pid "$p" && continue
     kill -"$1" "$p" 2>/dev/null || true
   done
 }
