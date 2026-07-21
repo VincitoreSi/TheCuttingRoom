@@ -161,8 +161,16 @@ FROM node:${NODE_TAG} AS nodebin
 FROM debian:bookworm-slim AS ffmpeg-minimal
 ARG FFMPEG_REF
 ARG X264_REF
-ARG FFMPEG_COMMIT=""
-ARG X264_COMMIT=""
+# RESOLVED AND RECORDED by the build/measure pass on 2026-07-22 (Docker 29.6.1, arm64). These
+# are now ASSERTED: the clone is by tag/branch and the build fails loudly if HEAD is not this
+# commit. n7.1.3 is an immutable tag, so FFMPEG_COMMIT will not move. x264 has no release
+# tags at all — `stable` is a BRANCH — so a commit id is the only real pin available, and when
+# videolan advances it this build stops with
+#     x264 commit <new> != pinned <old>
+# which is the point. To take the new x264: build once with --build-arg X264_COMMIT= (empty),
+# read the printed "x264 commit:" line, and paste it here.
+ARG FFMPEG_COMMIT="f46e514491172d15bd74b4abb1814cd2f05a763e"
+ARG X264_COMMIT="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ca-certificates git nasm pkg-config zlib1g-dev \
