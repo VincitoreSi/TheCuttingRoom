@@ -247,11 +247,23 @@ demo-data/data
 PATHS
   # Per-platform scrape + score output. Globbed rather than listed so a new platform is
   # covered the day its directory appears.
+  #
+  # pages.txt is in this list, and it is the one entry that is not scrape OUTPUT. It belongs
+  # here because `./demo` writes it: the demo dataset ships a watchlist of REAL creator
+  # handles (capture-demo.py copies it so the Sources card is populated), `./demo` copies the
+  # dataset over the working tree, and without this line `./clean` deleted content.json and
+  # profiles_meta.json out of this very directory while leaving behind the only file in it
+  # that names third parties. The Dashboard went on showing those sources after a wipe.
+  #
+  # It is also what the contract already promised: `./clean` restores "a fresh clone", and a
+  # fresh clone has `pages.txt.example` and no `pages.txt` — the file is gitignored and
+  # untracked. It is archived before deletion like everything else, so a hand-curated
+  # watchlist is recoverable from the zip; `./init --reset` is the path that keeps data.
   local d
   for d in "$ROOT"/ReelScraper/platforms/*/; do
     [ -d "$d" ] || continue
     local p="ReelScraper/platforms/$(basename "$d")"
-    printf '%s\n' "$p/content.json" "$p/profiles_meta.json"
+    printf '%s\n' "$p/content.json" "$p/profiles_meta.json" "$p/pages.txt"
     local f
     for f in "$d"*_raw*.json "$d"*.xlsx "$d"*.csv; do
       [ -e "$f" ] && printf '%s/%s\n' "$p" "$(basename "$f")"

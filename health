@@ -246,6 +246,8 @@ if [ "$IS_GIT" -eq 1 ]; then
   for p in "ReelScraper/media/instagram/1.jpg" "ReelScraper/media/x/1.jpg" \
            "ReelScraper/logs/agents.jsonl" "links.txt" \
            "ReelScraper/platforms/instagram/pages.txt" \
+           "ReelScraper/platforms/x/pages.txt" \
+           "ReelScraper/platforms/youtube/pages.txt" \
            "ReelScraper/platforms/instagram/content.json" \
            "ReelScraper/platforms/instagram/profiles_meta.json" \
            "ReelScraper/platforms/instagram/virality_reels.csv" \
