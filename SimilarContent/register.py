@@ -111,6 +111,14 @@ manifest = {
     "renderable": True,
     "dir": "SimilarContent",
     "render_cmd": ["uv", "run", "cli.py", "render"],
+    # How the hub launches `propose` (POST /api/pipeline/{p}/propose, and the cascading
+    # heartbeat). A SEPARATE capability from `renderable` on purpose: proposing reads the
+    # corpus and writes markdown into the human gate and costs nothing, while rendering
+    # spends image credits per frame — so the free, unattended trigger must not be gated on
+    # (or grantable by) the paid one. The hub appends the `propose` subcommand itself and
+    # will not take it from here, which is what stops a manifest reaching a paid verb.
+    "proposes": True,
+    "propose_cmd": ["uv", "run", "cli.py"],
     "config_schema": {
         "type": "object",
         "title": "similar-content knobs",

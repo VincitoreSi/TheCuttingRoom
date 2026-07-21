@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -445,7 +446,31 @@ def cmd_status(args) -> int:
     return 0
 
 
+def _install_stop_handler() -> None:
+    """Turn the hub's SIGTERM into a KeyboardInterrupt so this run's cleanup actually runs.
+
+    Unlike the scrapers — which set a flag and stop at a safe boundary — this agent has
+    nothing worth saving mid-clip, but it does have two things worth RELEASING. The
+    per-clip `finally` in `analyze_one` deletes the Gemini File API upload and the local
+    `work/<cid>.mp4`; under the default SIGTERM disposition neither runs, so a stopped run
+    leaks an uploaded video into Google's File API (it expires on their clock, not ours)
+    and leaves a multi-megabyte temp behind on every stop. Raising an exception is the only
+    way to reach a `finally`, and KeyboardInterrupt is the one `main` already handles — so
+    a stop exits 130 through the existing path rather than inventing a second one."""
+    def _handler(signum, frame):
+        raise KeyboardInterrupt()
+
+    for s in (signal.SIGTERM,):
+        try:
+            signal.signal(s, _handler)
+        except (ValueError, OSError, AttributeError):
+            # A non-main thread or an exotic platform must not stop the agent running at
+            # all; it just falls back to the blunt default.
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _install_stop_handler()
     _load_dotenv()
     parser = argparse.ArgumentParser(prog="analysis-engine", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)

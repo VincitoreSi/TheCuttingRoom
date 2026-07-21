@@ -14,10 +14,12 @@ niche_config.json.
 
 Each signal is percentile-normalized across the dataset, then blended by weights.
 """
-import json, csv, time, bisect
+import io, json, csv, time, bisect
 from pathlib import Path
 from statistics import median
 import openpyxl
+
+from core.atomicio import write_bytes_atomic, atomic_path
 
 from core.schema import Content
 
@@ -178,10 +180,21 @@ def write_reports(rows, out_xlsx, out_csv, top_n=100):
                    _cell(r, "outlier_score"), _cell(r, "engagement_rate"), _cell(r, "velocity"),
                    r.get("posted_iso"), r.get("caption")])
     Path(out_xlsx).parent.mkdir(parents=True, exist_ok=True)
-    wb.save(out_xlsx)
+    # openpyxl streams the workbook into a ZipFile opened on the destination path, so the
+    # real file is truncated for the whole serialization. Save to a temp, then rename.
+    with atomic_path(out_xlsx) as tmp_xlsx:
+        wb.save(tmp_xlsx)
 
-    with open(out_csv, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow([label for _, label in REEL_COLS])
-        for r in rows:
-            w.writerow([_cell(r, k) for k, _ in REEL_COLS])
+    # The CSV is worse than the xlsx if torn, because a short CSV does NOT raise:
+    # core/corpus.py just yields fewer rows, and every producer prompt downstream is then
+    # silently built on a partial corpus with no error anywhere. Serialize in memory first
+    # so the file on disk is only ever the complete document.
+    # Written as BYTES so the line endings are byte-identical to what the old
+    # `open(..., newline="")` produced — csv emits \r\n itself, and a text-mode write would
+    # translate it again.
+    buf = io.StringIO(newline="")
+    w = csv.writer(buf)
+    w.writerow([label for _, label in REEL_COLS])
+    for r in rows:
+        w.writerow([_cell(r, k) for k, _ in REEL_COLS])
+    write_bytes_atomic(out_csv, buf.getvalue().encode("utf-8"))
