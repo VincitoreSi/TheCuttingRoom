@@ -2,19 +2,28 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { useShell } from "../App";
 import {
+  useCascade,
   useConfig,
   useReducedMotion,
+  useSaveCascade,
   useSaveConfig,
   useSaveSchedule,
   useSchedule,
 } from "../lib/hooks";
-import { Button, Card, Eyebrow, Input, SectionHead, Select, Switch } from "../components/ui";
+import { Badge, Button, Card, Eyebrow, Input, SectionHead, Select, Switch } from "../components/ui";
 import { RangeSlider } from "../components/ui";
 import { IconCheck, IconPin, IconX } from "../components/icons";
 import { KeysAndModels } from "../components/config/KeysAndModels";
 import { sectionMotion } from "../lib/motion";
+import {
+  CASCADE_LIMITS,
+  FUNNEL_ROWS,
+  clampCascadeField,
+  funnelProjection,
+} from "../lib/cascadeFunnel";
+import type { CascadeField } from "../lib/cascadeFunnel";
 import { consumeConfigFocus } from "../lib/nav";
-import type { NicheConfig, Tier } from "../lib/types";
+import type { CascadeRow, NicheConfig, Tier } from "../lib/types";
 import { cx } from "../lib/cx";
 
 const WEIGHT_LABELS: Record<string, string> = {
@@ -30,6 +39,60 @@ export function ConfigView() {
   const scheduleQ = useSchedule();
   const sched = scheduleQ.data?.[platform];
   const saveSchedule = useSaveSchedule(platform);
+  const cascadeQ = useCascade();
+  const cascadeRow = cascadeQ.data?.[platform];
+  const saveCascade = useSaveCascade(platform);
+
+  // The funnel numbers are edited locally and written on RELEASE — a slider wired straight
+  // to a PUT sends one per pixel of a drag. A draft outlives its own PUT: it is dropped
+  // when the refetched row agrees (below) or when the hub refuses, so the control never
+  // snaps back to the old number for the length of a round trip.
+  const [cascadeDrafts, setCascadeDrafts] = useState<Partial<Record<CascadeField, string>>>({});
+  const dropDraft = (field: CascadeField) =>
+    setCascadeDrafts((p) => {
+      if (!(field in p)) return p;
+      const next = { ...p };
+      delete next[field];
+      return next;
+    });
+  // a draft belongs to the platform it was typed against — never carry it across a switch,
+  // where it would both misreport the new platform and PUT the old platform's number.
+  useEffect(() => setCascadeDrafts({}), [platform]);
+  useEffect(() => {
+    if (!cascadeRow) return;
+    setCascadeDrafts((p) => {
+      const next = { ...p };
+      let changed = false;
+      for (const field of Object.keys(next) as CascadeField[]) {
+        if (clampCascadeField(field, next[field]) !== cascadeRow[field]) continue;
+        delete next[field];
+        changed = true;
+      }
+      return changed ? next : p;
+    });
+  }, [cascadeRow]);
+
+  /** What a control shows: the in-flight draft while it is being edited, the hub's answer
+      otherwise. `cascadeField` is the same value as a number, for the projection. */
+  const cascadeText = (field: CascadeField) =>
+    cascadeDrafts[field] ?? String(clampCascadeField(field, cascadeRow?.[field]));
+  const cascadeField = (field: CascadeField) =>
+    clampCascadeField(field, cascadeDrafts[field] ?? cascadeRow?.[field]);
+
+  /** Commit one field, one PUT. The value arrives as an ARGUMENT: reading it back out of
+      the draft map in the same tick that set it commits the PREVIOUS value, and on the
+      first drag reads undefined and gives up without saying so. */
+  const commitCascade = (field: CascadeField, raw: string) => {
+    if (raw.trim() === "") return dropDraft(field); // emptied box — hand it back to the hub
+    const next = clampCascadeField(field, raw);
+    if (next === cascadeRow?.[field]) return dropDraft(field);
+    setCascadeDrafts((p) => ({ ...p, [field]: String(next) })); // show what was SENT
+    saveCascade.mutate({ [field]: next } as Partial<CascadeRow>, {
+      // a refused PUT answers with a sentence; never leave the control showing a number
+      // the hub did not take.
+      onError: () => dropDraft(field),
+    });
+  };
   const save = useSaveConfig(platform);
   const reduced = useReducedMotion();
 
@@ -169,6 +232,17 @@ export function ConfigView() {
   }
 
   const sumOk = Math.abs(weightSum - 1) < 0.001;
+
+  // Projected off the LIVE values (drafts included), so the volumes move under the thumb
+  // while a slider is being dragged and settle on what the hub took.
+  const projected = funnelProjection({
+    scrape_count: cascadeField("scrape_count"),
+    analyze_pct: cascadeField("analyze_pct"),
+    media_pct: cascadeField("media_pct"),
+    blueprint_pct: cascadeField("blueprint_pct"),
+    propose_pct: cascadeField("propose_pct"),
+  });
+  const blueprintsOn = cascadeRow?.include_blueprints ?? false;
 
   return (
     <div className="flex flex-col gap-5 max-w-4xl">
@@ -331,8 +405,172 @@ export function ConfigView() {
         </Card>
       </motion.div>
 
+      {/* cascading heartbeat — the percentage funnel */}
+      <motion.div {...sectionMotion(5, reduced)}>
+        <Card className="p-5">
+          <SectionHead
+            eyebrow="Cascading heartbeat"
+            title="Auto-trigger stages on new data"
+            right={
+              <Switch
+                checked={cascadeRow?.enabled ?? false}
+                onChange={(v) => saveCascade.mutate({ enabled: v })}
+                label="Enable the cascade"
+              />
+            }
+          />
+          <p className="text-[13px] text-[var(--ink-dim)] mb-4">
+            A 60s tick that walks new data down the pipeline on its own. One batch size anchors the
+            funnel and each stage below takes a <strong>percentage</strong> of the stage above it,
+            so a later stage can never fire more often than the one feeding it. The chain ends at
+            the gate — <strong>rendering is never automatic</strong>. Stored per-platform in{" "}
+            <code>config/pipeline_cascade.json</code>.
+          </p>
+
+          {/* The funnel, top to bottom: an absolute batch, then four percentages of the row
+              above. The right column is what one cycle is expected to move — a ceiling, not
+              a promise, which is what the ≤ says. */}
+          <div className="mb-4">
+            {FUNNEL_ROWS.map((row) => {
+              const paid = row.key === "blueprint";
+              return (
+                <div
+                  key={row.key}
+                  className={cx(
+                    "funnel-row",
+                    paid && "funnel-row--paid",
+                    // off means this boundary will not fire at all — say so by fading the
+                    // whole row rather than leaving a live-looking control that does nothing.
+                    paid && !blueprintsOn && "funnel-row--muted",
+                  )}
+                >
+                  <div className="funnel-row__rail">
+                    <span className="funnel-row__dot" />
+                  </div>
+                  <span className="funnel-row__name">
+                    {row.label}
+                    {paid && (
+                      <Badge tone="oxblood" className="ml-2">
+                        paid
+                      </Badge>
+                    )}
+                  </span>
+                  {row.key === "scrape" ? (
+                    <span className="funnel-row__anchor">
+                      <Input
+                        type="number"
+                        className="w-24"
+                        value={cascadeText("scrape_count")}
+                        min={CASCADE_LIMITS.scrape_count.min}
+                        max={CASCADE_LIMITS.scrape_count.max}
+                        aria-label="Reels scraped per cycle"
+                        onChange={(e) =>
+                          setCascadeDrafts((p) => ({ ...p, scrape_count: e.target.value }))
+                        }
+                        onBlur={(e) => commitCascade("scrape_count", e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                      />
+                      <Eyebrow>per cycle</Eyebrow>
+                    </span>
+                  ) : (
+                    <RangeSlider
+                      value={cascadeField(row.field)}
+                      min={CASCADE_LIMITS[row.field].min}
+                      max={CASCADE_LIMITS[row.field].max}
+                      step={1}
+                      aria-label={`${row.label} — percent of the stage above`}
+                      /* drag paints, release writes: onChange only moves the draft, and the
+                         single PUT goes out of onCommit. */
+                      onChange={(v) => setCascadeDrafts((p) => ({ ...p, [row.field]: String(v) }))}
+                      onCommit={(v) => commitCascade(row.field, String(v))}
+                    />
+                  )}
+                  <span className="funnel-row__pct">
+                    {row.key === "scrape" ? "batch" : `${cascadeField(row.field)}%`}
+                  </span>
+                  <span className="funnel-row__vol">
+                    {row.key === "scrape" ? "" : "≤"}
+                    {projected[row.key]}
+                    <span className="funnel-row__unit">{row.unit}</span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          <label className="flex items-start gap-2 mb-3 text-[13px] text-[var(--ink-dim)]">
+            <input
+              type="checkbox"
+              checked={blueprintsOn}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                saveCascade.mutate({ include_blueprints: e.target.checked })
+              }
+              className="mt-[3px]"
+            />
+            <span>
+              Let the cascade generate blueprints. <strong>Costs API credits per clip</strong> —
+              that boundary calls Gemini once for every one. Off by default, and while it is off the
+              Blueprint row above is greyed out because it will not fire.
+            </span>
+          </label>
+
+          {/* propose_count is NOT propose_pct: the percentage decides how much blueprint
+              output reaches the propose boundary, this decides what one firing publishes. */}
+          <div className="flex items-center gap-3 flex-wrap mb-3">
+            <label className="text-[13px] text-[var(--ink-dim)]" htmlFor="cascade-propose-count">
+              Recipes published per propose firing
+            </label>
+            <Input
+              id="cascade-propose-count"
+              type="number"
+              className="w-20"
+              value={cascadeText("propose_count")}
+              min={CASCADE_LIMITS.propose_count.min}
+              max={CASCADE_LIMITS.propose_count.max}
+              aria-label="Recipes published per propose firing"
+              onChange={(e) => setCascadeDrafts((p) => ({ ...p, propose_count: e.target.value }))}
+              onBlur={(e) => commitCascade("propose_count", e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            />
+            <Eyebrow>
+              {CASCADE_LIMITS.propose_count.min}–{CASCADE_LIMITS.propose_count.max} · clamped by
+              what is actually available
+            </Eyebrow>
+          </div>
+
+          {/* A stored configuration the hub refuses to run reports itself here, in its own
+              words — the toggle above reads false while this is set, and that is the reason. */}
+          {cascadeRow?.problem && (
+            <div className="text-[12px] text-[var(--danger)] bg-[var(--danger-wash)] rounded-[var(--r-sm)] px-3 py-2 mb-2">
+              {cascadeRow.problem}
+            </div>
+          )}
+          {cascadeRow?.propose_agent_problem && (
+            <div className="text-[12px] text-[var(--amber)] px-3 py-2 mb-2">
+              {cascadeRow.propose_agent_problem}
+            </div>
+          )}
+
+          {cascadeRow && (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] font-mono text-[var(--ink-dim)]">
+              {cascadeRow.due?.length > 0 && (
+                <span className="text-[var(--brass-ink)]">next · {cascadeRow.due.join(", ")}</span>
+              )}
+              {cascadeRow.counts && (
+                <span>
+                  counts ·{" "}
+                  {(Object.entries(cascadeRow.counts) as [string, number][])
+                    .map(([s, v]) => `${s}:${v}`)
+                    .join("  ")}
+                </span>
+              )}
+            </div>
+          )}
+        </Card>
+      </motion.div>
+
       {/* discovery */}
-      <motion.div {...sectionMotion(4, reduced)}>
+      <motion.div {...sectionMotion(6, reduced)}>
         <Card className="p-5">
           <SectionHead
             eyebrow="Discovery"
@@ -375,7 +613,7 @@ export function ConfigView() {
       </motion.div>
 
       {/* pages */}
-      <motion.div {...sectionMotion(5, reduced)} id="config-pages">
+      <motion.div {...sectionMotion(7, reduced)} id="config-pages">
         <Card className="p-5">
           <SectionHead
             eyebrow={`pages.txt · ${pages.length} handle${pages.length === 1 ? "" : "s"}`}

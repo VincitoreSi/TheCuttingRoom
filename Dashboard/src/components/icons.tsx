@@ -211,6 +211,14 @@ export const IconFilm = (p: P) => (
   </I>
 );
 
+/* stop — a cut line, pairing with the stopped-seam vocabulary */
+export const IconStop = (p: P) => (
+  <I {...p}>
+    <line x1="6" y1="6" x2="18" y2="18" />
+    <line x1="18" y1="6" x2="6" y2="18" />
+  </I>
+);
+
 /* the Discover node (§11) — a scout's glass reading the tape ticks, echoing
    the ruler vocabulary instead of introducing a new pictogram. */
 export const IconDiscover = (p: P) => (

@@ -52,19 +52,25 @@ class ScheduleIn(BaseModel):
 
 
 class CascadeIn(BaseModel):
-    """Cascade settings for one platform: how much NEW input each boundary waits for before
-    it fires the next stage. Every field optional so the UI can toggle one thing without
-    resending the rest.
+    """Cascade settings for one platform, expressed as a FUNNEL: one batch size that anchors
+    the chain, then the percentage of each boundary's input that is expected to reach the
+    next one. Every field optional so the UI can toggle one thing without resending the rest.
 
-    There is deliberately NO field here that names a stage. The stages the cascade may
-    launch are the fixed `CASCADE_STAGES` list, `render` is not in it, and `steps` keys
-    outside that list are dropped on read — so no request to this model, and no hand-edit
-    of the file it writes, can make an unattended trigger spend image-API credits."""
+    There is deliberately NO field here that names a stage — not even `steps`, which used to
+    be an input and is now DERIVED from these percentages (see `_cascade_steps`). The stages
+    the cascade may launch are the fixed `CASCADE_STAGES` list, `render` is not in it, and
+    `marks` keys outside that list are dropped on read — so no request to this model, and no
+    hand-edit of the file it writes, can make an unattended trigger spend image-API credits.
+    """
     enabled: Optional[bool] = None
     # The analysis-engine boundary calls a paid API per clip. Same name, same default and
     # same reasoning as the scheduler's flag above.
     include_blueprints: Optional[bool] = None
-    steps: Optional[dict[str, int]] = None
+    scrape_count: Optional[int] = None            # the batch size the whole funnel anchors on
+    analyze_pct: Optional[int] = None
+    media_pct: Optional[int] = None
+    blueprint_pct: Optional[int] = None           # the analysis-engine boundary — PAID
+    propose_pct: Optional[int] = None
     propose_count: Optional[int] = None
 
 
@@ -2773,6 +2779,11 @@ def _schedule_loop():
 #     propose        every N new blueprints, publishing `propose_count` recipes
 #
 # ...and then it STOPS, at the human gate. Nothing after `propose` is automatic.
+#
+# The N per boundary is not typed in. The operator types a batch size (`scrape_count`) and a
+# pass-through PERCENTAGE per boundary, and `_cascade_steps` derives the N chain from those.
+# That is what makes "a downstream stage can never fire more often than the one feeding it"
+# structural rather than a rule the API has to police — see `_cascade_funnel_problem`.
 def _cascade_file():
     """Resolved per call, not bound at import — same reason as `_schedule_file`: the test
     fixture repoints ROOT, and a module-level constant kept writing the developer's real
@@ -2791,28 +2802,39 @@ assert "render" not in CASCADE_STAGES
 CASCADE_DEFAULTS = {
     "enabled": False,
     "include_blueprints": False,
-    # Keyed by the stage that FIRES, so the keys are CASCADE_STAGES and cannot drift.
-    # 40 -> 40 -> 40 -> 40-then-3 is "for every 40 reels analyzed, the script should be
-    # analyzed and three proposals should be there", literally. The first three boundaries
-    # are ~1:1 transforms (a reel becomes a row becomes a clip becomes a blueprint) so there
-    # is nothing to taper; the funnel narrows at the one many-to-few boundary, and then 3->1
-    # at the human gate, which is why the gate has no integer.
-    "steps": {"analyze": 40, "media": 40, "analysis-engine": 40, "propose": 40},
+    # The funnel. `scrape_count` is one batch — the amount of new raw material the whole
+    # chain is sized against — and each pct is how much of a boundary's input is expected to
+    # survive to the next one. 250 reels, all of them analyzed, 60% worth downloading, 20% of
+    # those worth a (paid) blueprint, 20% of those worth proposing against. `steps` is not
+    # here: it is DERIVED from these five by `_cascade_steps`.
+    "scrape_count": 250,
+    "analyze_pct": 100,
+    "media_pct": 60,
+    "blueprint_pct": 20,          # the analysis-engine boundary — PAID
+    "propose_pct": 20,
     "propose_count": 3,
     # The high-water marks: how much input each boundary has already consumed. Machine-owned
     # — accepted-but-ignored on PUT.
     "marks": {s: 0 for s in CASCADE_STAGES},
 }
+# Which percentage governs which boundary. Keyed by the stage that FIRES, so the keys are
+# CASCADE_STAGES and cannot drift — and note the FIELD names still do not name a stage.
+CASCADE_PCTS = {"analyze": "analyze_pct", "media": "media_pct",
+                "analysis-engine": "blueprint_pct", "propose": "propose_pct"}
+assert set(CASCADE_PCTS) == set(CASCADE_STAGES)
 # What is persisted, in order. Everything else `_read_cascade` returns is derived and must
-# not be written back (`problem` especially — it is a symptom, not a setting).
-CASCADE_PERSISTED = ("enabled", "include_blueprints", "steps", "propose_count", "marks")
+# not be written back — `problem` especially (a symptom, not a setting), and now `steps` too.
+CASCADE_PERSISTED = ("enabled", "include_blueprints", "scrape_count", "analyze_pct",
+                     "media_pct", "blueprint_pct", "propose_pct", "propose_count", "marks")
 PROPOSE_COUNT_MAX = 25        # mirrors the `top_n` schema the producer registers
+SCRAPE_COUNT_MAX = 5_000      # one batch; above this the funnel is describing someone else's box
+CASCADE_STEP_MAX = 1_000_000  # ceiling on a DERIVED step — see _cascade_steps
 _CASCADE_LOCK = threading.Lock()
 
 
 def _cascade_ints(src, defaults, floor):
     """Coerce a {stage: int} map, key by key, dropping every key that is not a cascade
-    stage. Dropping rather than honouring is what makes `{"steps": {"render": 1}}` a
+    stage. Dropping rather than honouring is what makes `{"marks": {"render": 1}}` a
     no-op instead of an instruction.
 
     The except is deliberately BARE: the fallback is the default either way, and a narrower
@@ -2830,22 +2852,57 @@ def _cascade_ints(src, defaults, floor):
     return out
 
 
+def _cascade_int(src, key, lo, hi):
+    """Coerce one stored scalar into lo..hi, falling back to its default. Key by key and with
+    a BARE except for the same reason as `_cascade_ints` above: a narrower handler let `1e400`
+    through as float('inf'), and int(inf) raises OverflowError."""
+    try:
+        return min(hi, max(lo, int(src.get(key, CASCADE_DEFAULTS[key]))))
+    except Exception:
+        return CASCADE_DEFAULTS[key]
+
+
+def _cascade_steps(row):
+    """Derive {stage: step} — how much NEW input each boundary waits for — from the funnel.
+    Each boundary has to see enough input that, at its pass-through rate, one batch's worth
+    reaches the next one:
+
+        step[stage] = ceil(step[previous] * 100 / pct[stage])
+
+    Every pct is coerced into 1..100 before this runs, so every multiplier is >= 1 and the
+    result is ALWAYS non-decreasing along CASCADE_STAGES. That is the whole point of the
+    funnel model: "a downstream stage must not fire more often than the one feeding it" is
+    now structural and cannot be violated through the API at all.
+
+    Clamped to CASCADE_STEP_MAX because a chain of 1% compounds to 10^10 — a threshold no
+    counter on this box will ever cross, which reads to an operator as silently broken. The
+    clamp is applied to the running value, so a clamped chain stays non-decreasing too."""
+    steps, prev = {}, row["scrape_count"]
+    for stage in CASCADE_STAGES:
+        prev = min(CASCADE_STEP_MAX, -(-prev * 100 // row[CASCADE_PCTS[stage]]))
+        steps[stage] = prev
+    return steps
+
+
 def _cascade_funnel_problem(steps, propose_count):
     """Is this configuration one where a later stage could fire MORE often than the stage
     feeding it? Returns the sentence to show a human, or None.
 
-    A stage fires roughly total_input/step times, and each stage's input is at most its
-    predecessor's (not every reel gets media, not every clip gets a blueprint) — so `steps`
-    being non-decreasing along CASCADE_STAGES is a sufficient, checkable condition for
-    "downstream never outruns upstream". Plus propose_count <= steps["propose"], because
-    publishing 3 recipes per 1 new blueprint widens the funnel at the last boundary."""
-    for prev, nxt in zip(CASCADE_STAGES, CASCADE_STAGES[1:]):
-        if steps[nxt] < steps[prev]:
-            return (f"{nxt} must not fire more often than {prev} — give steps.{nxt} at "
-                    f"least {steps[prev]} (the {prev} step), or lower steps.{prev}.")
+    Only ONE case is left to check. `steps` being non-decreasing along CASCADE_STAGES used to
+    be checked here; it is now guaranteed by construction in `_cascade_steps` (every
+    multiplier is >= 1), so the loop that used to enforce it is kept below only as a cheap
+    assertion of that invariant — it is O(3) on a map we just built, and if it ever fires the
+    derivation is wrong, which is worth failing closed over rather than discovering as a bill.
+
+    What is NOT structural is propose_count <= steps["propose"]: publishing 3 recipes per 1
+    new blueprint widens the funnel at the last boundary, and propose_count is its own field.
+    """
+    assert all(steps[nxt] >= steps[prev]
+               for prev, nxt in zip(CASCADE_STAGES, CASCADE_STAGES[1:]))
     if propose_count > steps["propose"]:
-        return (f"propose_count must not exceed steps.propose — give steps.propose at "
-                f"least {propose_count}, or lower propose_count to {steps['propose']}.")
+        return (f"propose_count must not exceed the propose step — that boundary fires every "
+                f"{steps['propose']} new blueprints, so lower propose_count to "
+                f"{steps['propose']}, or raise scrape_count / the funnel percentages.")
     return None
 
 
@@ -2883,8 +2940,13 @@ def _read_cascade():
                   "include_blueprints": _strict_bool(
                       row.get("include_blueprints"),
                       CASCADE_DEFAULTS["include_blueprints"]),
-                  "steps": _cascade_ints(row.get("steps"), CASCADE_DEFAULTS["steps"], 1),
+                  "scrape_count": _cascade_int(row, "scrape_count", 1, SCRAPE_COUNT_MAX),
+                  **{f: _cascade_int(row, f, 1, 100) for f in CASCADE_PCTS.values()},
                   "marks": _cascade_ints(row.get("marks"), CASCADE_DEFAULTS["marks"], 0)}
+        # DERIVED, never read from the file. An older install's stored `steps` is simply
+        # ignored — it was an input to a model that no longer exists, and a per-install file
+        # this build already rewrites is not worth a migration.
+        merged["steps"] = _cascade_steps(merged)
         try:
             merged["propose_count"] = min(PROPOSE_COUNT_MAX, max(
                 1, int(row.get("propose_count") or CASCADE_DEFAULTS["propose_count"])))
@@ -2919,9 +2981,13 @@ def _write_cascade(cfg):
     except Exception:
         raw = {}
     for p, row in cfg.items():
-        stored = raw.get(p)
-        raw[p] = {**(stored if isinstance(stored, dict) else {}),
-                  **{k: row[k] for k in CASCADE_PERSISTED}}
+        stored = raw.get(p) if isinstance(raw.get(p), dict) else {}
+        # `steps` USED to be persisted and is now derived. Unknown keys are deliberately kept
+        # (see above), but this one is not unknown — it is a field this build owns and no
+        # longer stores, and leaving a stale copy on disk invites a hand edit that does
+        # nothing at all. Dropping it is the whole of the "migration".
+        stored = {k: v for k, v in stored.items() if k != "steps"}
+        raw[p] = {**stored, **{k: row[k] for k in CASCADE_PERSISTED}}
     _write_json(_cascade_file(), raw)
 
 
@@ -3146,10 +3212,10 @@ def _cascade_loop():
 
 @app.get("/api/cascade")
 def get_cascade():
-    """Per-platform cascade settings, with the boundary arithmetic already done — `counts`,
-    `due`, `next_at` — so the UI never recomputes it, the same courtesy GET /api/schedule
-    pays with `next_run_at`. `problem` is non-null when a stored configuration refuses to
-    run; the UI shows that sentence in place of the toggle state.
+    """Per-platform cascade settings, with the boundary arithmetic already done — the derived
+    `steps`, plus `counts`, `due` and `next_at` — so the UI never recomputes it, the same
+    courtesy GET /api/schedule pays with `next_run_at`. `problem` is non-null when a stored
+    configuration refuses to run; the UI shows that sentence in place of the toggle state.
 
     A row with a `problem` reports `enabled: false` and an empty `due`, because that is the
     truth about what will happen. That answer is DERIVED here and never written back — the
@@ -3187,16 +3253,21 @@ def put_cascade(platform, body: CascadeIn):
 
     A funnel-widening configuration is REFUSED with a sentence naming both fields rather
     than silently clamped: this is a human typing into a form, and a silent clamp means the
-    number they see afterwards is not the number they typed, so they type it again."""
+    number they see afterwards is not the number they typed, so they type it again.
+
+    `steps` in a body is ignored — it is derived from the funnel now, and there is no field
+    here that names a stage."""
     if platform not in PLATFORMS:
         raise HTTPException(404, f"unknown platform {platform}")
     with _CASCADE_LOCK:
         cfg = _read_cascade()
         row = cfg[platform]
-        if body.steps is not None:
-            # Keys outside CASCADE_STAGES are DROPPED here too, so a PUT cannot introduce a
-            # stage the tick would then have to refuse.
-            row["steps"] = _cascade_ints(body.steps, row["steps"], 1)
+        for field, hi in (("scrape_count", SCRAPE_COUNT_MAX), *((f, 100) for f in
+                                                                CASCADE_PCTS.values())):
+            v = getattr(body, field)
+            if v is not None:
+                row[field] = min(hi, max(1, int(v)))
+        row["steps"] = _cascade_steps(row)
         if body.propose_count is not None:
             row["propose_count"] = min(PROPOSE_COUNT_MAX, max(1, int(body.propose_count)))
         problem = _cascade_funnel_problem(row["steps"], row["propose_count"])
@@ -3229,8 +3300,8 @@ def put_cascade(platform, body: CascadeIn):
             row["enabled"] = bool(body.enabled)
         _write_cascade(cfg)
     log.info("cascade updated", extra={"platform": platform,
-                                       **{k: row[k] for k in
-                                          ("enabled", "include_blueprints", "propose_count")},
+                                       **{k: row[k] for k in CASCADE_PERSISTED
+                                          if k != "marks"},
                                        "steps": row["steps"]})
     return get_cascade()[platform]
 

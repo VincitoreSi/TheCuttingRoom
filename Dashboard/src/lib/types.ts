@@ -599,15 +599,33 @@ export interface CascadeRow {
   enabled: boolean;
   /** may the analysis-engine boundary fire? It calls a PAID API once per clip. */
   include_blueprints: boolean;
-  /** how much NEW input each boundary needs before it fires, keyed by the stage that fires */
-  steps: Record<CascadeStage, number>;
   /** high-water marks — how much input each boundary has already consumed. Machine-owned;
       accepted-but-ignored on PUT. */
   marks: Record<CascadeStage, number>;
-  /** how many recipes one propose firing publishes (1..25), clamped by availability */
+  /** how many recipes one propose firing publishes (1..25), clamped by availability.
+      NOT the same thing as `propose_pct` — that is how much of the blueprint output
+      reaches the propose boundary, this is what one firing then puts on the gate. */
   propose_count: number;
 
+  // ---- the funnel: one absolute batch size, then percentages of the row above ----
+  // The whole configuration, and the only part of it a human sets. `steps` used to be the
+  // input and could be typed into a shape where a later boundary fired more often than the
+  // one feeding it; percentages capped at 100 make that impossible by construction.
+  /** the batch size that anchors the funnel (1..5000) */
+  scrape_count: number;
+  /** % of the scraped batch that reaches the analyze boundary (1..100) */
+  analyze_pct: number;
+  /** % of the analyzed output that reaches the media boundary (1..100) */
+  media_pct: number;
+  /** % of the media output that reaches the analysis-engine boundary (1..100) — PAID */
+  blueprint_pct: number;
+  /** % of the blueprint output that reaches the propose boundary (1..100) */
+  propose_pct: number;
+
   // ---- derived by the hub, never written back ----
+  /** how much NEW input each boundary needs before it fires, keyed by the stage that
+      fires. DERIVED from the percentages above — read-only, and ignored on PUT. */
+  steps: Record<CascadeStage, number>;
   stages: CascadeStage[];
   /** the live input count for each boundary, in that boundary's own unit */
   counts: Record<CascadeStage, number>;
