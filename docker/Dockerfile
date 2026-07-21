@@ -67,7 +67,17 @@ ARG NODE_TAG=20-bookworm-slim
 #             missed. Flipping it is a legitimate outcome, not a defeat — but SAY SO in the
 #             plan, because it is ~130 MB of image.
 ARG FFMPEG_VARIANT=minimal
-ARG FFMPEG_REF=n7.1.1
+# n7.1.3, NOT n7.1.1 — and the difference is one line of upstream's libavcodec/Makefile.
+# MEASURED: n7.1.1 does not link with this configure line. libavcodec/h2645_sei.c:935 calls
+# ff_aom_uninit_film_grain_params() unconditionally, but in n7.1.1 the Makefile compiles
+# aom_film_grain.o only for CONFIG_HEVC_SEI / CONFIG_HEVC_DECODER (:111,113,442) — so a build
+# that enables the h264 decoder (which poster() at stitch.py:195-198 requires, because it
+# reads the finished mp4 back) and no HEVC dies at link with
+#     libavcodec.a(h2645_sei.o): undefined reference to `ff_aom_uninit_film_grain_params'
+# n7.1.3 adds aom_film_grain.o to OBJS-$(CONFIG_H264_SEI) and links clean. Verified against
+# upstream's Makefile at n7.1.1, n7.1.2, n7.1.3, n8.0 and n8.1: only n7.1.3+ has the fix, and
+# the call site is still unconditional in 8.1, so this is a floor and not a workaround.
+ARG FFMPEG_REF=n7.1.3
 ARG X264_REF=stable
 ARG FFMPEG_STATIC_IMAGE=mwader/static-ffmpeg:7.1
 
@@ -274,11 +284,16 @@ RUN npm run build
 
 
 # ==========================================================================================
-# docsbuild — optional. Produces documentation/site for app.py:3396-3398's /documentation
-# mount. Always runs (a conditional FROM is not a thing); `app` deletes the output when
-# WITH_DOCS != 1.
+# docs-1 / docs-0 — optional documentation site for app.py:3396-3398's /documentation mount.
+#
+# A conditional FROM *is* a thing, via the same alias trick the ffmpeg variants use, and here
+# it is worth ~55 s of wall clock on every cold build. WITH_DOCS defaults to 0; the draft's
+# single always-run docsbuild stage paid for an mkdocs-material install and a full mkdocs
+# build on every build and then threw the output away in `app`. WITH_DOCS must be exactly
+# `0` or `1` — anything else is a "failed to solve: docs-<x>: not found" at the FROM below,
+# which is the intended failure.
 # ==========================================================================================
-FROM --platform=$BUILDPLATFORM python:${PYTHON_TAG} AS docsbuild
+FROM --platform=$BUILDPLATFORM python:${PYTHON_TAG} AS docs-1
 COPY --from=uvbin /uv /usr/local/bin/uv
 WORKDIR /build
 # mkdocs lives in ReelScraper's dev dependency group.
@@ -286,9 +301,28 @@ COPY ReelScraper/pyproject.toml ReelScraper/uv.lock ./ReelScraper/
 RUN --mount=type=cache,target=/root/.cache/uv,sharing=locked \
     cd ReelScraper && uv sync --frozen --no-install-project --group dev
 COPY documentation/ ./documentation/
-# The exact command `docsite` and .github/workflows/docs.yml run, so a docs build that passes
-# CI cannot fail differently here.
-RUN cd ReelScraper && uv run mkdocs build -f ../documentation/mkdocs.yml
+# `--no-sync` is REQUIRED and its absence was a real build failure, not a nicety.
+#
+# `docsite` runs this on a host where the project is already installed. Here the stage
+# deliberately syncs with --no-install-project (sources are not copied — that is the point of
+# the layer split), and a bare `uv run` then notices the environment is missing the project
+# and tries to build `the-cutting-room @ file:///build/ReelScraper`, whose setuptools backend
+# immediately fails:
+#     error: package directory 'core' does not exist
+#     file cli.py (for module cli) not found
+# --no-sync tells uv to use the environment exactly as synced. mkdocs is an entry point in
+# that environment and does not import the project.
+RUN cd ReelScraper && uv run --no-sync mkdocs build -f ../documentation/mkdocs.yml
+
+# The WITH_DOCS=0 twin: same contract (a directory at /build/documentation/site), no mkdocs.
+# The base image is already pulled for pybase, so this stage is one empty layer.
+FROM --platform=$BUILDPLATFORM python:${PYTHON_TAG} AS docs-0
+RUN mkdir -p /build/documentation/site
+
+# WITH_DOCS is a GLOBAL ARG (declared with the other pins at the top); global ARGs are the
+# only ones legal in a FROM. Do not add a stage-scoped `ARG WITH_DOCS` above this line — it
+# would bind to docs-0, not to this FROM.
+FROM docs-${WITH_DOCS} AS docsbuild
 
 
 # ==========================================================================================
