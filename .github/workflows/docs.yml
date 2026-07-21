@@ -47,7 +47,7 @@ jobs:
         run: uv run --project ReelScraper mkdocs build -f documentation/mkdocs.yml
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: documentation/site
 
