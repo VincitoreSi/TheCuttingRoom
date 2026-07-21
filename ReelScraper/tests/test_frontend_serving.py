@@ -59,6 +59,35 @@ def test_the_shell_is_never_cached(hub):
     assert r.headers["cache-control"] == "no-store"
 
 
+def test_the_building_page_links_to_the_published_documentation(hub):
+    """It used to link to /docs — the hub's own Swagger UI, which answers "what endpoints
+    exist", not the "how do I start this thing" question of someone waiting on a first build.
+    The address is read from mkdocs.yml so there is one declaration of it, not two."""
+    r = hub.get("/")
+
+    assert hub.mod.DOCS_URL, "documentation/mkdocs.yml should declare a resolved site_url"
+    assert f'href="{hub.mod.DOCS_URL}"' in r.text
+    assert 'href="/docs"' not in r.text
+
+
+def test_the_docs_url_comes_from_mkdocs(hub, tmp_path):
+    cfg = tmp_path / "mkdocs.yml"
+    cfg.write_text("site_name: X\nsite_url: https://example.github.io/Repo/\n")
+
+    assert hub.mod._published_docs_url(cfg) == "https://example.github.io/Repo/"
+
+
+def test_an_unpersonalised_fork_gets_no_docs_link(hub, tmp_path):
+    """mkdocs.yml ships the literal token GITHUB_USER until scripts/apply-identity.sh
+    rewrites it, and https://GITHUB_USER.github.io/ resolves nowhere. A missing link is a
+    smaller failure than one that looks live and 404s."""
+    cfg = tmp_path / "mkdocs.yml"
+    cfg.write_text("site_url: https://GITHUB_USER.github.io/TheCuttingRoom/\n")
+
+    assert hub.mod._published_docs_url(cfg) is None
+    assert hub.mod._published_docs_url(tmp_path / "absent.yml") is None
+
+
 def test_the_api_keeps_working_while_the_frontend_is_missing(hub):
     """The build being absent says nothing about the API's health."""
     assert hub.get("/").status_code == 503

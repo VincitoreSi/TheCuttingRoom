@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- The "Building the dashboard…" page now links to the published documentation site
+  instead of the hub's own `/docs` Swagger UI. Swagger answers "what endpoints
+  exist", which is not the question someone waiting on a first build is asking, and
+  it renders from a CDN bundle so it shows an empty frame when the schema or the
+  network is unhappy. The address is read from `documentation/mkdocs.yml`'s
+  `site_url`, so a fork gets its own site once `scripts/apply-identity.sh` has run.
+  `/docs` itself is unchanged and still served.
 
 ## [1.0.0] - 2026-07-21
 

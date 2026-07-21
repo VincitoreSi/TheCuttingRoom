@@ -1764,6 +1764,31 @@ DOCS_SITE = ROOT.parent / "documentation" / "site"
 if DOCS_SITE.exists():
     app.mount("/documentation", StaticFiles(directory=str(DOCS_SITE), html=True), name="documentation")
 
+
+def _published_docs_url(cfg: Path):
+    """Where the documentation is published, read from mkdocs.yml's `site_url`.
+
+    Not hardcoded, and deliberately not parsed with a YAML library: mkdocs is a dev-group
+    dependency, so the hub cannot import yaml at runtime. `site_url` is already the single
+    declaration of that address — it drives canonical links and sitemap.xml on the Pages
+    deploy — and scripts/apply-identity.sh rewrites it per fork. Naming an owner here
+    instead would point every fork's hub at somebody else's site.
+    """
+    try:
+        text = cfg.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"^site_url:\s*(\S+)", text, re.MULTILINE)
+    if not m:
+        return None
+    url = m.group(1).strip().strip("'\"")
+    # A fork that has not run apply-identity.sh still carries the literal placeholder, and
+    # https://GITHUB_USER.github.io/ resolves nowhere. No link beats a dead one.
+    return None if "GITHUB_USER" in url else url
+
+
+DOCS_URL = _published_docs_url(ROOT.parent / "documentation" / "mkdocs.yml")
+
 FRONTEND = ROOT / "frontend" / "dist"
 
 
@@ -1789,6 +1814,15 @@ def _favicon():
 # not been built yet, or is being rebuilt underneath us. Self-refreshing, because the whole
 # problem it solves is someone staring at a page that will never change on its own.
 # Deliberately dependency-free: no /assets, no fonts, nothing that needs the build to exist.
+#
+# The one link here used to be /docs, the hub's own Swagger UI. Wrong destination twice over:
+# Swagger answers "what are the endpoints", not the "how do I get started" question someone
+# waiting on a first build is actually asking — and it renders from a CDN bundle, so it shows
+# an empty frame whenever the schema or the network is unhappy. It points at the published
+# documentation instead. /docs is untouched and still served.
+_DOCS_LINK = (f'<p><a href="{DOCS_URL}" style="color:#a49c8e">Documentation</a> — quickstart,'
+              ' architecture and the API reference.</p>') if DOCS_URL else ""
+
 _BUILDING_PAGE = """<!doctype html>
 <meta charset="utf-8"><title>Building the dashboard…</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -1813,7 +1847,7 @@ _BUILDING_PAGE = """<!doctype html>
   <p>The API hub is already running. This page reloads by itself the moment the build
      lands — no need to touch anything.</p>
   <p>Watch it with <code>tail -f .hub.log</code>, or the terminal running <code>./init</code>.</p>
-  <p><a href="/docs" style="color:#a49c8e">API docs</a> work now.</p>
+  __DOCS_LINK__
 </div>
 <script>
   // Poll rather than a blind timer: reload only once real markup is being served, so the
@@ -1825,7 +1859,8 @@ _BUILDING_PAGE = """<!doctype html>
     } catch (e) { /* hub restarting — keep waiting */ }
   }, 2000);
 </script>
-"""
+""".replace("__DOCS_LINK__", _DOCS_LINK)   # .replace, not .format — the CSS and JS above are
+                                           # full of literal braces an f-string would swallow
 
 # Created unconditionally so StaticFiles can always mount: whether a frontend exists is
 # decided PER REQUEST below, not once at import. It used to be decided here at startup,
