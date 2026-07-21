@@ -7,7 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-22
+
 ### Added
+- **An eighth stage: Propose.** `discover → sources → scrape → analyze → media → blueprint →
+  propose → studio`. A producer that declares `proposes: true` ranks the winners by how cheap
+  they are to remake, joins each to its blueprint, and writes a recipe into the human gate.
+  It is deliberately a *separate* capability from `renderable`: proposing reads the corpus and
+  writes markdown and costs nothing, while rendering spends image-API credits per frame. The
+  free, unattended trigger must never be gated on — or grantable by — the paid one, so
+  `_producer_dir(agent, capability=…)` enforces the split and the hub appends the `propose`
+  subcommand itself rather than trusting a manifest to spell it out. With no producer
+  declaring it, or more than one, the hub returns 409 rather than guessing.
+- **The cascading heartbeat, as a percentage funnel.** One anchor (`scrape_count`) and a
+  percentage per stage; the number of runs each stage needs is *derived*
+  (`step[stage] = ceil(step[previous] × 100 / pct[stage])`). Because every percentage is ≤ 100,
+  the derived steps can only ever increase down the funnel — monotonicity is structural rather
+  than validated, so there is no invalid configuration to reject. **The cascade stops at the
+  studio and can never fire `render` under any setting**; `render` is not in `CASCADE_STAGES`
+  and an assertion keeps it out.
+- **Stop.** Every running stage can be stopped from the Board. The stage card's Run button
+  *becomes* the stop control while a job is running rather than growing a second button —
+  with eight nodes on the track there is no room for two, and the earlier two-button layout
+  clipped out of the card.
+- **A container lane.** `./cr` plus a single image: `./cr build`, `up`, `down`, `agent`,
+  `health`, `docsite`, `shell`, `keys`, `status`, `verify-loopback`. Install Docker and
+  nothing else — no uv, Python, Node or ffmpeg on the host. Measured at **305.8 MB
+  uncompressed / 92 MB to pull**, an 86 s cold build and 8 s after a source edit. Windows is
+  supported through WSL2 only. Documented in full at `documentation/docs/docker.md`.
+- **`./health --strict`**, for CI and releases. Four invariants — the tracked-`.env` check,
+  the git-history secret scan, the demo-dataset check and the working-data ignore check —
+  degraded to skips whenever git could not be read, and the run still printed HEALTHY having
+  checked materially less than it claimed. Nobody reads a skip counter. `--strict` turns
+  environment-driven skips into failures; a bare `./health` still degrades gracefully, which
+  is right for a tarball.
+- **Two new invariants for the container boundary.** The existing "hub binds loopback only"
+  check is a grep for `0.0.0.0` in the hub source, and in container mode it keeps passing
+  while proving nothing — the hub binds `0.0.0.0` inside its own network namespace on
+  purpose, because that is the only address compose can forward to. `compose publishes on
+  loopback` lints every `ports:` entry for a `127.0.0.1:` or `[::1]:` prefix and needs no
+  Docker; `off-loopback refused` records whether the property was actually *observed*, which
+  only `./cr verify-loopback` can do from the host.
+- **The host-lane scripts refuse to run against a containerized checkout.** All six stop with
+  the `./cr` equivalent instead of guessing. `./stop` matters most: it identifies the hub by
+  working directory, which is meaningless across a container boundary, so it found nothing,
+  reported success, and left the container running. `TCR_FORCE_HOST=1` overrides.
+- **`./demo --no-launch`** — load the dataset and start no hub. Required by `./cr demo`, which
+  runs the script in a one-shot container where reaching the launch step would start a second
+  hub on a port nothing publishes.
+- Skipped tests are counted and named in `./health`'s summary. A green suite that quietly ran
+  fewer tests than it could is the failure mode worth surfacing: a broken ffmpeg install turns
+  ~13 real stitch tests into silence, and the run still said HEALTHY.
 - **Two clones on one machine can no longer touch each other**, which is what running two
   niches at once requires. Nothing here writes outside its own directory, so the whole
   coupling was the loopback: the port, and the `BACKEND_API` every agent dials.
@@ -57,6 +107,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mutation swallowed its error.
 
 ### Fixed
+- **`score_ease` collapsed every clip onto the same number, so nothing was ever proposed.**
+  All three terms were banded and all three saturated: the shot bands stopped at 4 while real
+  reels run 6–7 (scoring 0 on a 45-point signal), the duration bands made 9.43 s and 9.87 s
+  identical, and the static-camera term was all-or-nothing. Six distinct blueprints all scored
+  exactly 40 against a gate of 55 — the ordering test passed on `assert 40 > 40` only because
+  its fixture guaranteed shot-count contrast while asserting score contrast. The terms are now
+  continuous, and those six blueprints separate into 52.18 / 51.80 / 51.66 / 51.03 / 50.70 /
+  50.62. This was a live defect since v1.0.0, found because the skipped-test reporting above
+  made it visible.
+- **The cascade config saved nothing and silently reverted.** The form sent `scrape_count` and
+  the per-stage percentages to a Pydantic model that declared none of them, and Pydantic v2
+  ignores unknown fields by default — so the `PUT` returned 200, persisted nothing, and the
+  success handler refetched a row without those fields, snapping every control back to a
+  hardcoded default. A save that reports success and discards the data is worse than one that
+  fails.
+- **The Stop button clipped out of its card.** Adding the `propose` node took the board from
+  seven cells to eight (−12.5 % width each) at the same moment a second, non-shrinking button
+  was added to a slot that had just stopped being full-width. One button that changes meaning
+  fits; two never did.
+- The documentation site deployed without `--strict`, so a dead cross-reference or a nav entry
+  pointing at a renamed file was a warning, an exit 0, and a broken page found by a reader
+  rather than in review. Both `./health` and the deploy workflow now use the identical command.
+- `./init` aborted on any host with GNU coreutils: `mktemp -t vp-setup` is valid BSD and
+  invalid GNU, and every developer here is on macOS while every container is not.
+- `./clean` deleted git-tracked files when `git` errored rather than answered. "No `.git`" and
+  "git could not read the `.git` that is right there" are not the same state, and a bind mount
+  owned by another uid produces the second; the check now fails closed.
 - **A hub that outlived a `git pull` kept serving the old API, and the Board said
   "undefined pages".** Python imports a module once and serves it from memory, so a hub
   left running from an earlier session goes on answering with the response shape it started
@@ -188,5 +265,6 @@ spin those into ready-to-post drafts behind a human gate.
 - Generated media is kept in a separate namespace from the scraped corpus, so a
   producer can never overwrite a real creator's video.
 
-[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/VincitoreSi/TheCuttingRoom/releases/tag/v1.0.0
