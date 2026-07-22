@@ -126,7 +126,13 @@ services:
       #
       # Knobs that need source changes first, commented out until they land:
       # TCR_CHECKOUT_ID: ${COMPOSE_PROJECT_NAME}   # /api/hub identity, replaces path compare
-      # HUB_ADVERTISE: "127.0.0.1"                 # stop BACKEND_API becoming http://0.0.0.0
+      #
+      # HUB_ADVERTISE has LANDED (cli.py hub_url) and is deliberately still not set here,
+      # because it no longer needs to be: a wildcard bind is now advertised as loopback on its
+      # own, so BACKEND_API and the printed HUB_URL are dialable without being told. Set it
+      # only for a hub reachable under a name or address it cannot infer from its own socket
+      # — behind a reverse proxy, or published to a LAN address on purpose.
+      # HUB_ADVERTISE: "hub.example.internal"
 
     # -------------------------------------------------------------------------------------
     # THERE IS NO env_file: BLOCK, AND ITS ABSENCE IS THE POINT.

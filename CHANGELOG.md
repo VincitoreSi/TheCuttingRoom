@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **The hub advertised an address browsers refuse to open.** From `docker run`, it printed
+  `HUB_URL=http://0.0.0.0:8787` and logged the same for `/docs` — and both opened
+  `about:blank`, while typing `localhost:8787` by hand worked. The socket was fine (`curl`
+  fetches the unspecified address happily); Chrome has blocked navigation to it since v128,
+  where blocking it *was* the security fix, and a blocked navigation renders as a blank page
+  rather than an error. The container binds the wildcard on purpose — it is the only address
+  compose can forward a published port to — so the bind was right and only the advertisement
+  was wrong. `cli.py` now derives a dialable URL from the bind address for everything it
+  prints, logs, opens, and exports as `BACKEND_API`.
+- **`HUB_ADVERTISE`** now exists, for a hub reachable under a name or address it cannot infer
+  from its own socket. `docker/docker-compose.yml` had carried it commented out, as a "knob
+  that needs source changes first", since before anything read it. It is still not set there:
+  a wildcard bind resolves itself now.
+
 ## [1.3.0] - 2026-07-22
 
 ### Added
