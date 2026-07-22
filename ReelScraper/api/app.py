@@ -1072,6 +1072,64 @@ def set_studio_status(platform, file, body: StatusUpdate):
     log.info("studio gate decision", extra={"platform": platform, "file": name, "status": body.status})
     return {"ok": True, "file": name, "status": body.status}
 
+@app.delete("/api/studio/{platform}/{file}")
+def delete_studio_item(platform, file):
+    """Remove a REJECTED studio item — the card, not the record of it.
+
+    Registered before the /{file}/render route for the same reason `stop_stage` is: path
+    depth cannot actually collide here, but registration order is this file's rule.
+
+    THREE THINGS THIS DELIBERATELY DOES NOT DO.
+
+    It does not delete anything that is not `rejected`. A proposed item is one click from
+    approval and an approved one is a real generation somebody kept; the only state where
+    "remove this card" unambiguously means "I am done with it" is the one a human already
+    said no to. Everything else is a 409 naming the current status, so the route can never
+    become the fast path to losing work — this repo has destroyed five real approvals once
+    already (see save_proposal).
+
+    It does not touch gate.jsonl, and appends to it instead. That file is the append-only
+    record of what was decided; a delete that erased its own audit trail would leave an
+    approve/reject history with holes in exactly the places someone later wants to ask about.
+
+    It refuses when generated media exists, rather than cascading. A render is paid output
+    (~$0.04/frame) and lives under its own id; DELETE /api/renders/{platform}/{render_id}
+    already exists and says what it is doing. Clearing a card must not be a way to silently
+    spend-then-destroy — so if the directory is there, this 409s and names the route.
+    """
+    pdir(platform)  # validate
+    name = _studio_filename(file)
+    d = ROOT / "studio" / platform
+    path = d / name
+    if not path.exists():
+        raise HTTPException(404, f"no studio item {platform}/{name}")
+    meta = _read_json(_studio_meta_path(platform), {})
+    entry = meta.get(name) or {}
+    status = entry.get("status")
+    if status != "rejected":
+        raise HTTPException(409, f"only a rejected item can be removed — {name} is "
+                                 f"{status or 'unrecorded'}. Reject it first if you are done "
+                                 f"with it.")
+    rid = _render_id(name)
+    # ROOT / "renders", not the module-level RENDERS constant. RENDERS is bound at import and
+    # the test fixture repoints ROOT without it (tests/conftest.py repoints ROOT, MEDIA,
+    # PRODUCERS_FILE, LOGS_FILE and FRONTEND — not this one), so a guard reading RENDERS
+    # consults the DEVELOPER'S real renders directory while under test: it answered "no media
+    # here" for a fixture that had just created some, and the delete went through.
+    if (ROOT / "renders" / platform / rid).is_dir():
+        raise HTTPException(409, f"{name} has rendered media — delete that first with "
+                                 f"DELETE /api/renders/{platform}/{rid}, then remove the item.")
+    now = time.time()
+    _append_jsonl(d / "gate.jsonl", {"ts": now, "file": name, "status": "deleted",
+                                     "note": entry.get("note"), "agent": entry.get("agent"),
+                                     "kind": entry.get("kind")})
+    path.unlink()
+    meta.pop(name, None)
+    _write_json(_studio_meta_path(platform), meta)
+    log.info("studio item deleted", extra={"platform": platform, "file": name})
+    return {"ok": True, "file": name, "deleted": True}
+
+
 @app.post("/api/studio/{platform}/{file}/render")
 def render_studio_item(platform, file, body: RenderRequest | None = None):
     """Render ONE approved studio item. The producer that WROTE the item is the one
