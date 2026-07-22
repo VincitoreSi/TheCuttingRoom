@@ -44,6 +44,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from core.hubevents import HubEvents  # noqa: E402
 from core.logsetup import setup_logging  # noqa: E402
 from core.atomicio import write_text_atomic  # noqa: E402
 from core.stopflag import install_stop_handler, stop_requested, sleep_unless_stopped  # noqa: E402
@@ -346,7 +347,8 @@ def _fetch_engagement(video_id: str):
 
 
 # ── driver ───────────────────────────────────────────────────────────────────────
-def collect_shorts(entry: str, resolved: dict, limit: int, want_engagement: bool):
+def collect_shorts(entry: str, resolved: dict, limit: int, want_engagement: bool,
+                   events=None):
     key = resolved["key"]
     followers = resolved["followers"]
     ids = list(resolved["video_ids"])
@@ -360,6 +362,10 @@ def collect_shorts(entry: str, resolved: dict, limit: int, want_engagement: bool
         seen = set(ids)
         ids.extend(v for v in more if v not in seen)
         log.info("shorts page", extra={"channel": entry, "page": pages, "added": len(ids) - before, "total": len(ids)})
+        if events:
+            events.emit_throttled("item.progress", content_id=entry,
+                                  msg=f"{entry}: {len(ids)} shorts found",
+                                  data={"stage": "Scraping", "got": len(ids), "of": limit})
         if len(ids) == before:
             break
     ids = ids[:limit]
@@ -377,6 +383,14 @@ def collect_shorts(entry: str, resolved: dict, limit: int, want_engagement: bool
             videos.append(rec)
         if n % 10 == 0 or n == len(ids):
             log.info("videos", extra={"channel": entry, "done": n, "of": len(ids), "kept": len(videos)})
+            # The DOMINANT phase, and the one the continuation-page heartbeat alone would
+            # miss: up to `limit` videos at 0.6-1.6s each is minutes of silence per channel,
+            # far past the 45s staleness threshold. Hung on the existing every-10 throttle,
+            # and the emitter's own 30s floor bounds the volume.
+            if events:
+                events.emit_throttled("item.progress", content_id=entry,
+                                      msg=f"{entry}: {n}/{len(ids)} videos",
+                                      data={"stage": "Scraping", "got": n, "of": len(ids)})
         time.sleep(random.uniform(*VIDEO_DELAY))
     return followers, videos
 
@@ -403,7 +417,8 @@ def _load_json(p: Path):
 
 
 def main():
-    setup_logging("scrape", platform="youtube")
+    run_id = setup_logging("scrape", platform="youtube")
+    events = HubEvents("scrape", run_id=run_id, platform="youtube")
     # Own SIGTERM before anything is written: the default disposition kills the process
     # mid-write, and shorts_raw.json is this platform's corpus. See core/stopflag.py.
     install_stop_handler()
@@ -439,6 +454,9 @@ def main():
     done_keys = {k.lstrip("@") for k in shorts_all}
     todo = [c for c in channels if c.lstrip("@") not in done_keys]
     log.info("plan", extra={"assigned": len(channels), "scraping": len(todo), "limit": args.limit, "engagement": not args.fast})
+    events.emit("run.start", msg=f"scraping {len(todo)} channels",
+                data={"stage": "Scraping", "total": len(todo), "assigned": len(channels),
+                      "already_saved": len(channels) - len(todo)})
 
     stopped = False
     by_request = False
@@ -451,25 +469,44 @@ def main():
             stopped = by_request = True
             break
         log.info("channel start", extra={"i": n, "of": len(todo), "channel": c})
+        # content_id is the RAW ENTRY `c` on every event in this loop, never resolved["key"].
+        # The key is only known after load_channel, so an item.start keyed on `c` and an
+        # item.done keyed on `key` would be two different items to the board's per-content_id
+        # fold: done/total could never reach parity, and the "N in flight" counter only
+        # clears a cid on a MATCHING item.done, so it would climb to the channel count and
+        # stay there for the whole run. The resolved key travels in data instead.
+        events.emit("item.start", content_id=c, msg=f"scraping {c}",
+                    data={"stage": "Scraping", "i": n, "of": len(todo)})
         try:
             resolved = load_channel(c)
         except Exception as e:
             log.error("could not resolve channel, skipping", extra={"channel": c, "err": str(e)})
+            events.emit("item.error", level="error", content_id=c,
+                        msg=f"{c}: could not resolve", data={"stage": "Failed"})
             continue
         key = resolved["key"]
         log.info("resolved", extra={"channel": c, "key": key, "followers": resolved["followers"],
                                     "first_batch": len(resolved["video_ids"])})
         if key.lstrip("@") in done_keys:
             log.info("already saved, skipping", extra={"channel": c, "key": key})
+            # item.done, not a silent continue: the run's done/total must be able to
+            # reach parity, and this channel IS on disk — that is why it is skipped.
+            events.emit("item.done", content_id=c, msg=f"{c}: already saved",
+                        data={"stage": "Done", "skipped": True, "key": key})
             continue
         try:
-            followers, videos = collect_shorts(c, resolved, args.limit, want_engagement=not args.fast)
+            followers, videos = collect_shorts(c, resolved, args.limit,
+                                               want_engagement=not args.fast, events=events)
         except Blocked as e:
             log.error("CIRCUIT BREAKER — saving partial progress and exiting", extra={"reason": str(e)})
+            events.emit("item.error", level="error", content_id=c,
+                        msg=f"blocked on {c} — stopping", data={"stage": "Failed"})
             stopped = True
             break
         except Exception as e:
             log.error("channel failed, skipping", extra={"channel": c, "err": str(e)})
+            events.emit("item.error", level="error", content_id=c,
+                        msg=f"{c}: failed", data={"stage": "Failed"})
             continue
         shorts_all[key] = videos
         done_keys.add(key.lstrip("@"))
@@ -484,6 +521,9 @@ def main():
         write_text_atomic(meta_path, json.dumps(meta_all, ensure_ascii=False, indent=1))
         write_text_atomic(shorts_path, json.dumps(shorts_all, ensure_ascii=False, indent=1))
         log.info("channel done", extra={"channel": c, "key": key, "shorts": len(videos)})
+        events.emit("item.done", content_id=c, msg=f"{c}: {len(videos)} shorts",
+                    data={"stage": "Done", "items": len(videos), "key": key,
+                          "reels_total": sum(len(v) for v in shorts_all.values())})
         if n < len(todo):
             # Interruptible: PEP 475 resumes a bare sleep after the handler returns, so the
             # flag alone would leave a Stop press looking ignored for the whole delay.
@@ -496,6 +536,9 @@ def main():
               else "STOPPED EARLY (rate limit)" if stopped else "DONE")
     log.info("%s — %d shorts across %d channels -> %s", status, total, len(shorts_all), shorts_path.name,
              extra={"status": status, "shorts": total, "channels": len(shorts_all)})
+    events.emit("run.end", msg=f"{status} — {total} shorts across {len(shorts_all)} channels",
+                data={"status": status, "reels": total, "creators": len(shorts_all),
+                      "stopped": by_request})
     log.info("next: run `python run.py analyze`")
 
 

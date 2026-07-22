@@ -46,7 +46,8 @@ def _seed(tmp_path, handles, raw):
 
 
 def _run(scrape, tmp_path, monkeypatch, fetch=None):
-    monkeypatch.setattr(scrape, "scrape_creator", fetch or (lambda c, limit: (None, [])))
+    monkeypatch.setattr(scrape, "scrape_creator",
+                        fetch or (lambda c, limit, events=None: (None, [])))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["scrape.py", "--file", str(tmp_path / "pages.txt")])
     scrape.main()
@@ -69,7 +70,7 @@ def test_adding_one_handle_keeps_the_creators_already_scraped(scrape, tmp_path, 
     _seed(tmp_path, ["creator_a", "creator_b", "creator_new"],
           {"creator_a": [{"id": 1, "code": "a1"}], "creator_b": [{"id": 2, "code": "b1"}]})
 
-    def fetch(c, limit):
+    def fetch(c, limit, events=None):
         assert c == "creator_new", f"already-saved creator {c} should not be re-fetched"
         return {"followers": 10}, [{"id": 9, "code": "n1"}]
 
@@ -85,10 +86,12 @@ def test_the_xlsx_rows_describe_the_whole_corpus_not_just_this_run(scrape, tmp_p
     cover every creator on disk — otherwise the report drops the resumed ones."""
     _seed(tmp_path, ["creator_a", "creator_b"], {"creator_a": [{"id": 1, "code": "a1"}]})
     monkeypatch.setattr(scrape, "scrape_creator",
-                        lambda c, limit: ({"followers": 5}, [{"id": 2, "code": "b1"}]))
+                        lambda c, limit, events=None: ({"followers": 5},
+                                                       [{"id": 2, "code": "b1"}]))
 
     _run(scrape, tmp_path, monkeypatch,
-         fetch=lambda c, limit: ({"followers": 5}, [{"id": 2, "code": "b1"}]))
+         fetch=lambda c, limit, events=None: ({"followers": 5},
+                                              [{"id": 2, "code": "b1"}]))
 
     rows, summary = scrape.rows_and_summary(_raw(tmp_path), {})
     assert len(rows) == 2
@@ -102,7 +105,7 @@ def test_an_unreadable_raw_file_does_not_abort_the_scrape(scrape, tmp_path, monk
     (tmp_path / "reels_raw.json").write_text('{"creator_a": [', encoding="utf-8")
 
     _run(scrape, tmp_path, monkeypatch,
-         fetch=lambda c, limit: ({"followers": 1}, [{"id": 1, "code": "a1"}]))
+         fetch=lambda c, limit, events=None: ({"followers": 1}, [{"id": 1, "code": "a1"}]))
 
     assert list(_raw(tmp_path)) == ["creator_a"]
 
