@@ -4,6 +4,23 @@ This page gets the pipeline running end-to-end on your machine: install the hub,
 
 ## Prerequisites
 
+!!! tip "Or skip all of this: run it in Docker"
+    Everything in the table below — uv, Python, Node, ffmpeg — is already in the image, so the
+    container lane needs **Docker and nothing else**:
+
+    ```sh
+    ./cr build
+    ./cr up
+    ./cr keys --set     # only needed for blueprints and rendering
+    ```
+
+    That starts the hub and opens the Dashboard, picking a free host port automatically if
+    8787 is taken. You still supply your own **Gemini API key**, because a key is yours and not
+    the image's — `./cr keys --set` is this lane's equivalent of `./init`'s prompt (`./init`
+    itself needs Python on the host, which is the dependency Docker exists to avoid). Every
+    command on this page then runs inside the container as `./cr agent <name> …` instead of
+    `cd <Agent> && uv run cli.py …`. Full reference: [Run it in Docker](docker.md).
+
 | Requirement | Why | Notes |
 |---|---|---|
 | **uv** | Dependency/env management for every Python agent | Installs `.venv` from `pyproject.toml` + `uv.lock`; every command is prefixed `uv run` |
@@ -17,6 +34,9 @@ This page gets the pipeline running end-to-end on your machine: install the hub,
     Every agent references its secrets by **environment variable name only**. The hub never stores secret values — `GET /api/config/agent/{agent}/secrets/status` only reports presence (`true`/`false`), never the value itself. Set keys in each agent's own `.env` (copy from `.env.example` in `_producer-template/` when scaffolding a new one).
 
 ## Install
+
+*(Docker lane: `./cr build` does all of this inside the image — skip to
+[Launch the hub](#launch-the-hub).)*
 
 The hub — ReelScraper — is the only component you must install to get a working pipeline; sibling agents (AnalysisEngine, SimilarContent, AutoSearch, Dashboard) are independent uv-managed projects that integrate purely over HTTP via `BACKEND_API`.
 
@@ -54,7 +74,11 @@ From inside `ReelScraper/`, the single entry point is `cli.py`:
 uv run cli.py start
 ```
 
-This boots the FastAPI hub and opens the Dashboard at **http://127.0.0.1:8787**. In production the hub serves the Dashboard's built frontend (`frontend/dist`) as static files at `/`, same-origin — there is no separate frontend server to run. If `frontend/dist` hasn't been built yet, the hub falls back to a plain "hub is running, frontend not built" page instead.
+In Docker that one command is `./cr up`, from the repo root instead of from `ReelScraper/`.
+
+This boots the FastAPI hub and opens the Dashboard at **http://127.0.0.1:8787** (or the next
+free port, if something already holds 8787 — both lanes pin their choice in
+`ReelScraper/.env`). In production the hub serves the Dashboard's built frontend (`frontend/dist`) as static files at `/`, same-origin — there is no separate frontend server to run. If `frontend/dist` hasn't been built yet, the hub falls back to a plain "hub is running, frontend not built" page instead.
 
 !!! note "Interactive API contract"
     Every request body in the hub is a typed Pydantic model, so `http://127.0.0.1:8787/docs` gives you a live, browsable OpenAPI contract for the whole `/api/*` surface — useful while you're getting oriented.

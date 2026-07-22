@@ -12,6 +12,7 @@
 #   ./cr health [args]     run ./health in the dev image
 #   ./cr verify-loopback   prove the published port is NOT reachable off loopback
 #   ./cr keys              check-keys.py, from inside the container's network
+#   ./cr keys --set        enter your Gemini API key (the container lane's ./init prompt)
 #   ./cr shell             a shell in the running hub container
 #   ./cr docsite           docs live-reload on http://127.0.0.1:8000
 #   ./cr demo              load the demo dataset (unzips INSIDE the container)
@@ -134,21 +135,26 @@ fi
 # The \r strip mirrors _common.sh's read_key. It is not decoration: a .env authored on Windows
 # and read under WSL2 keeps its carriage returns, and HUB_PORT="8788\r" makes the compose
 # publish spec invalid in a way whose error message names neither the file nor the key.
-readkey() {
-  [ -f "$ENVFILE" ] || return 0
-  sed -n "s/^[[:space:]]*$1=//p" "$ENVFILE" 2>/dev/null | tail -1 | tr -d '\r "'
+# The _file variants take the path, because the per-agent .env files (AnalysisEngine/.env and
+# SimilarContent/.env, where the Gemini key lives) are not this checkout's ReelScraper/.env.
+readkey_file() {
+  [ -f "$1" ] || return 0
+  sed -n "s/^[[:space:]]*$2=//p" "$1" 2>/dev/null | tail -1 | tr -d '\r "'
 }
-setkey() {
+setkey_file() {
   # awk + mv rather than sed -i, for the same BSD/GNU portability reason as _common.sh:
   # `sed -i` takes an argument on BSD and not on GNU.
-  mkdir -p "$(dirname "$ENVFILE")"
-  touch "$ENVFILE"
-  tmp="$ENVFILE.tmp.$$"
-  awk -v k="$1" -v v="$2" '
+  _f=$1; _k=$2; _v=$3
+  mkdir -p "$(dirname "$_f")"
+  touch "$_f"
+  _t="$_f.tmp.$$"
+  awk -v k="$_k" -v v="$_v" '
     $0 ~ "^[[:space:]]*"k"=" { print k"="v; found=1; next } { print }
     END { if (!found) print k"="v }
-  ' "$ENVFILE" > "$tmp" && mv "$tmp" "$ENVFILE"
+  ' "$_f" > "$_t" && mv "$_t" "$_f"
 }
+readkey() { readkey_file "$ENVFILE" "$1"; }
+setkey()  { setkey_file  "$ENVFILE" "$1" "$2"; }
 
 # --- the per-checkout compose project name ------------------------------------------------
 # A hash of the ABSOLUTE path, so two clones can never collide. sha256sum on Linux, shasum on
@@ -197,6 +203,133 @@ export TZ
 
 dc() { docker compose -f "$COMPOSE_FILE" "$@"; }
 
+# --- automatic host-port selection --------------------------------------------------------
+# The host lane solves this in _common.sh's claim_port, and we cannot call it: DESIGN
+# CONSTRAINT 1 rules out python3, and claim_port's port_free IS a python socket bind. Nor may
+# we imitate it with nc/lsof/ss — none of the three is guaranteed on a host whose only
+# promised dependency is Docker, and all three answer the wrong question. "Is anything
+# listening on 8787" is not "can the engine publish 127.0.0.1:8787": Docker Desktop's proxy
+# holds ports in ways a host-side probe cannot see, so a false "free" would still need a retry
+# underneath it and a false "busy" would skip a usable port.
+#
+# So compose is the probe. The thing that binds is the thing that tests, which makes the
+# answer exact rather than inferred, needs nothing installed, and cannot drift out of sync
+# with the compose file's own publish spec.
+
+# port_taken <file> — true if a captured stderr is the port-collision failure and nothing else.
+#
+# Two spellings, because there are two: the engine's raw bind error, and compose's wording for
+# a port held by another CONTAINER rather than by a host process.
+port_taken() {
+  grep -qi -e 'address already in use' -e 'port is already allocated' "$1"
+}
+
+# port_holder <port> — a human description of what is sitting on that port, or nothing.
+#
+# PURELY DIAGNOSTIC, and that is what licenses the tool-sniffing this file refuses everywhere
+# else. The bind test above must be exact, so it may only use Docker; this one just makes the
+# message useful, so a host without lsof simply gets the shorter sentence. It must never fail:
+# every branch ends in return 0, because being unable to name the holder is not an error.
+#
+# Docker is asked first — it is the one tool ./cr may assume, and another checkout's container
+# is the single likeliest holder of 8787 on a machine that has this project on it twice.
+port_holder() {
+  _hp=$1
+  _c=$(docker ps --filter "publish=$_hp" --format '{{.Names}}' 2>/dev/null | head -1)
+  if [ -n "$_c" ]; then printf 'the docker container %s' "$_c"; return 0; fi
+
+  command -v lsof >/dev/null 2>&1 || return 0
+  _pid=$(lsof -tiTCP:"$_hp" -sTCP:LISTEN 2>/dev/null | head -1)
+  [ -n "$_pid" ] || return 0
+  _cmd=$(ps -p "$_pid" -o comm= 2>/dev/null | sed 's|.*/||; s/^ *//')
+  # The cwd identifies WHICH checkout, which is the thing you actually want to know when the
+  # answer is "python3" — the host lane launches its hub with cwd = <repo>/ReelScraper.
+  _cwd=$(lsof -a -p "$_pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)
+  if [ -n "$_cwd" ]; then
+    printf '%s (pid %s) running in %s' "${_cmd:-a process}" "$_pid" "$_cwd"
+  else
+    printf '%s (pid %s)' "${_cmd:-a process}" "$_pid"
+  fi
+  return 0
+}
+
+# up_on_free_port <envkey> <lo> <hi> <start> -- <compose args...>
+#
+# Exports <envkey>=<candidate>, runs `dc <args>`, and walks the range until the bind sticks.
+# Sets PICKED_PORT to the winner and pins it in ReelScraper/.env if it moved.
+#
+# ONLY the port-collision failure is retried. That clause is load-bearing: a loop that treated
+# every failure as "wrong port" would silently walk all 30 candidates on a missing image or on
+# the [::1] bind failure of an IPv6-less host, and would then blame the ports for it. Every
+# other failure replays its stderr and returns 1, so the caller's own die() message — which
+# knows what it was trying to do — is the one you read. If the daemon ever rewords the error,
+# the match stops firing and the behaviour degrades to exactly what it was before this
+# function existed, never to a wrong action.
+up_on_free_port() {
+  _key=$1 _lo=$2 _hi=$3 _first=$4
+  shift 4
+  # `[ x ] && shift` would be a bug under `set -e`: a false test makes the AND-list return
+  # non-zero, and a non-zero statement that is not a condition exits the script.
+  if [ "${1:-}" = "--" ]; then shift; fi
+
+  # The pinned value first, then the whole range with it skipped. Starting at $_first rather
+  # than at $_lo is not a detail: a checkout already pinned to 8790 must retry 8790 before it
+  # walks, or every run would drag it back down to 8787 and two clones would fight over one
+  # port forever.
+  _cands=$_first
+  _n=$_lo
+  while [ "$_n" -le "$_hi" ]; do
+    [ "$_n" = "$_first" ] || _cands="$_cands $_n"
+    _n=$((_n + 1))
+  done
+
+  # mktemp, not "$TMPDIR/cr-err.$$". A PID-derived name is predictable, and these are created
+  # with `>` and `tee` — on a shared /tmp that is the shape of a symlink pre-creation attack.
+  # Modern defaults (fs.protected_symlinks, a per-user TMPDIR on macOS) make it a non-event in
+  # practice, but mktemp costs nothing and is what scripts/_common.sh and ./health already use.
+  _err=$(mktemp) || die "cannot create a temporary file"
+  _rc=$(mktemp)  || die "cannot create a temporary file"
+  for _p in $_cands; do
+    export "$_key=$_p"
+    # stderr is tee'd, not swallowed: a cold start can take 180s and going silent for it would
+    # be worse than the failure this function exists to fix. The fd dance sends stderr down the
+    # pipe (2>&1 1>&3 with 3>&1 outside) while stdout goes straight through untouched. The
+    # status lands in a file because `set -o pipefail` is not POSIX — the pipeline's own status
+    # is tee's, which is always 0 — and it is captured inside an `if` because `set -e` would
+    # otherwise kill this subshell the instant compose failed, before anything recorded why.
+    { { if dc "$@" 2>&1 1>&3; then printf 0 >"$_rc"; else printf %s "$?" >"$_rc"; fi; } \
+        | tee "$_err" >&2; } 3>&1
+
+    if [ "$(cat "$_rc" 2>/dev/null)" = 0 ]; then
+      PICKED_PORT=$_p
+      rm -f "$_err" "$_rc"
+      if [ "$_p" != "$_first" ]; then
+        setkey "$_key" "$_p"
+        say ""
+        say "$_key $_first was already in use on this host, so ./cr moved to $_p and pinned"
+        say "$_key=$_p in ReelScraper/.env — ./health, ./stop and the next ./cr up all read it"
+        say "from there, so they agree. Nothing inside the container changed; it still serves"
+        say "on its own fixed port, and only the host side of the publish moved."
+      fi
+      return 0
+    fi
+
+    port_taken "$_err" || { rm -f "$_err" "$_rc"; return 1; }
+    _who=$(port_holder "$_p")
+    if [ -n "$_who" ]; then
+      say "./cr: host port $_p is held by $_who; trying the next free one in $_lo-$_hi..."
+    else
+      say "./cr: host port $_p is already taken; trying the next free one in $_lo-$_hi..."
+    fi
+  done
+
+  rm -f "$_err" "$_rc"
+  # 30 consecutive busy ports is not a situation to paper over with a random one — the same
+  # call claim_port makes. A random port is unbookmarkable and no .env could point at it.
+  die "every port from $_lo to $_hi is already in use on this host, so ./cr has nowhere to
+publish. Free one, or set $_key in ReelScraper/.env to a port you know is free."
+}
+
 url="http://127.0.0.1:$PORT"
 
 open_browser() {
@@ -230,6 +363,133 @@ host_get() {
     wget -q -O /dev/null -T "${2:-3}" "$1"; return $?
   fi
   return 2
+}
+
+# wait_for_http <url> <seconds> — poll until the URL answers, or give up.
+#
+# `docker compose up -d` returns when the CONTAINER has started, which is not when the SERVER
+# inside it is listening. For the docs container that gap is the whole mkdocs install-and-build
+# — tens of seconds on a cold container — and opening a browser into it lands on a connection
+# error that only clears if you reload by hand.
+#
+# Returns 0 as soon as it answers, 1 on timeout, 2 when this host has neither curl nor wget so
+# the question cannot be asked at all. Callers must treat 2 as "could not verify" and open the
+# browser anyway: unverifiable is not the same as broken, and refusing to open a browser on a
+# machine that merely lacks curl would be a worse bug than the one this fixes.
+wait_for_http() {
+  _u=$1 _limit=$2 _n=0 _rc=0
+  while [ "$_n" -lt "$_limit" ]; do
+    # `if`, not `&&` — a bare failing AND-list is a `set -e` exit, and this one is expected to
+    # fail on almost every pass.
+    if host_get "$_u" 2; then return 0; else _rc=$?; fi
+    [ "$_rc" -ne 2 ] || return 2
+    _n=$((_n + 1))
+    sleep 1
+  done
+  return 1
+}
+
+# The three agents that read the Gemini key, each from its OWN .env. The same set ./init
+# writes, deliberately and in lockstep: one lane must not leave the other half-configured.
+#
+# AutoSearch is included even though discovery is free. Discovery standardised on this same
+# key (AutoSearch/engine/gemini.py) and spends NOTHING with it: term expansion is gated behind
+# `term_expansion_enabled`, default False, and returns early when off. Storing the key while
+# it is idle is what turns the opt-in into one switch instead of a hunt for a file to edit.
+GEMINI_AGENTS="AnalysisEngine SimilarContent AutoSearch"
+
+# gemini_hint — one non-blocking line after a successful `up`, and nothing at all once a key
+# is set. `up` must stay scriptable, so this NEVER prompts and never changes the exit status.
+gemini_hint() {
+  gemini_key_present && return 0
+  say ""
+  say "  No GEMINI_API_KEY yet. Scrape, analyze and media work without one; blueprints and"
+  say "  captions/render need it.  Set it with:   ./cr keys --set"
+  # The trap worth naming out loud: exporting the key in the host shell looks like it should
+  # work and does nothing, because compose has no env_file on purpose. Someone who has done
+  # that will otherwise read "no key" as a bug in ./cr.
+  if [ -n "${GEMINI_API_KEY:-}" ]; then
+    say "  (GEMINI_API_KEY is exported in this shell, but that does NOT reach the container —"
+    say "   compose deliberately has no env_file, so keys are read from the per-agent .env"
+    say "   files on the bind mount. './cr keys --set' writes them.)"
+  fi
+  return 0
+}
+
+gemini_key_present() {
+  for _d in $GEMINI_AGENTS; do
+    [ -z "$(readkey_file "$ROOT/$_d/.env" GEMINI_API_KEY)" ] || return 0
+  done
+  return 1
+}
+
+# set_gemini_key — the container lane's answer to ./init's key prompt.
+#
+# ./init cannot serve this lane at all: it calls check_python (init:38) and so needs python3 ON
+# THE HOST, which is precisely the dependency the container lane promises you do not need. Nor
+# can `./cr keys` do it — check-keys.py only verifies, it never writes. So before this existed
+# a Docker-only user's only route to a working blueprint stage was to hand-author two .env
+# files that nothing had told them about.
+#
+# THE KEY NEVER PASSES THROUGH DOCKER. It is read here, written to the two bind-mounted .env
+# files here, and the container picks it up by READING THOSE FILES — the mechanism every
+# presence check already uses. Handing it to `exec -e GEMINI_API_KEY=...` instead would put a
+# live credential into the daemon's API call and its exec-inspect record: a smaller version of
+# exactly the mistake the "THERE IS NO env_file: BLOCK" comment in docker-compose.yml exists to
+# prevent. Bind mount in, file read out, nothing in between.
+set_gemini_key() {
+  say ""
+  say "  Gemini API key — blueprints (AnalysisEngine), captions and image rendering"
+  say "  (SimilarContent). Get one at https://aistudio.google.com/apikey"
+  say "  Input is hidden. Leave it empty to skip."
+
+  _old=""
+  if [ -t 0 ]; then
+    # POSIX sh has no `read -s`, so mute the terminal by hand — and restore it on Ctrl-C, or
+    # an interrupted prompt leaves the user with an invisible shell.
+    _old=$(stty -g 2>/dev/null) || _old=""
+    if [ -n "$_old" ]; then
+      trap 'stty "$_old" 2>/dev/null; printf "\n"; exit 130' INT
+      stty -echo
+    fi
+  fi
+  printf '  > ' >&2
+  _key=""; read -r _key || true
+  if [ -n "$_old" ]; then stty "$_old" 2>/dev/null || true; trap - INT; fi
+  printf '\n' >&2
+
+  if [ -z "$_key" ]; then
+    say "skipped — no key written. Scrape, analyze and media do not need one; blueprints"
+    say "and render do. Re-run './cr keys --set' whenever you have one."
+    return 0
+  fi
+
+  for _d in $GEMINI_AGENTS; do
+    setkey_file "$ROOT/$_d/.env" GEMINI_API_KEY "$_key"
+  done
+  say "saved to AnalysisEngine/.env, SimilarContent/.env and AutoSearch/.env (all gitignored)."
+  say "discovery does NOT spend on it: term expansion is off by default. Turn it on from the"
+  say "Dashboard (Discover) if you want widened search terms."
+  say "the hub reads these at import, so run './cr down && ./cr up' before the next run."
+
+  # Verify from INSIDE the container, which also proves the container's egress to Google —
+  # the network path that actually matters here. Needs a running hub; when there is none, say
+  # so rather than reporting a failure that is really "nothing to ask".
+  _st=$(dc ps --format '{{.State}}' hub 2>/dev/null | head -1) || _st=""
+  if [ "$_st" != "running" ]; then
+    say "the hub is not running, so the key was not verified. './cr up' then './cr keys'."
+    return 0
+  fi
+  printf '  checking the key with Google… ' >&2
+  if dc exec -T hub python3 /app/scripts/check-keys.py --only gemini --quiet >/dev/null 2>&1; then
+    say "✓"
+  else
+    say "✗"
+    # Kept, not reverted — the same call ./init makes (init:149). An offline machine is a
+    # failed CHECK, not a bad key, and making someone re-paste a good key is the worse error.
+    say "the check did not pass. It is saved anyway: this may just be a network problem."
+    say "Run './cr keys' for the full report, or './cr keys --set' again to replace it."
+  fi
 }
 
 cmd=${1:-up}
@@ -278,22 +538,23 @@ First non-comment line found: '$first'"
       say "redirect you to ./cr instead of guessing about a containerized hub."
     fi
 
-    dc up -d hub || die "docker compose up failed.
+    # A busy host port is handled here rather than reported: up_on_free_port walks 8787-8816,
+    # pins the winner, and only the range being exhausted reaches a die(). PORT and url are
+    # both recomputed from the winner — url is built before this case block runs, and the
+    # host-side probe below and open_browser both read it, so a move that did not propagate
+    # would poll a dead port and open a dead tab.
+    up_on_free_port HUB_PORT 8787 8816 "$PORT" -- up -d hub || die "docker compose up failed.
 
-If the message mentions 'Bind for 127.0.0.1:$PORT failed: port is already allocated', another
-process — very possibly another checkout's container — holds that host port. Pick a free one:
-    ./cr down
-    (edit HUB_PORT in ReelScraper/.env to $((PORT+1)))
-    ./cr up
-(the container always serves on 8787 internally; only the host side moves)
-
-If instead it mentions a bind failure on '[::1]', this host has IPv6 disabled. Delete the
+If the message mentions a bind failure on '[::1]', this host has IPv6 disabled. Delete the
     - \"[::1]:\${HUB_PORT}:8787\"
 line from docker/docker-compose.yml. DO NOT delete the '127.0.0.1:' prefix from the other
 line — that one is the entire security boundary, and ./cr up opens http://127.0.0.1:\$PORT,
 which does not need the IPv6 mapping.
 
 If the image does not exist yet, run ./cr build."
+
+    PORT=$PICKED_PORT
+    url="http://127.0.0.1:$PORT"
 
     # Poll rather than sleep. A cold start (image pull, four venv volumes seeding, the
     # entrypoint's dashboard copy) is much slower than `uv run cli.py start`, so 180s. Break
@@ -322,6 +583,7 @@ If the image does not exist yet, run ./cr build."
           say "  The Cutting Room is up:  $url"
           say "  logs:  ./cr logs -f     stop: ./cr down"
           say "  verify the loopback boundary:  ./cr verify-loopback"
+          gemini_hint
           open_browser "$url"
           exit 0
         fi
@@ -502,14 +764,29 @@ separately and is never committed. See demo-data/README.md."
     dport=$(readkey DOCS_PORT)
     [ -n "$dport" ] || dport="${DOCS_PORT:-8000}"
     DOCS_PORT="$dport"; export DOCS_PORT
-    dc --profile docs up -d docs
-    open_browser "http://127.0.0.1:$dport"
-    say "docs on http://127.0.0.1:$dport  (./cr down stops it)"
+    # Same treatment as the hub, and needed here more: 8000 is the most contended port on any
+    # developer machine, so this is the collision people actually hit.
+    up_on_free_port DOCS_PORT 8000 8029 "$dport" -- --profile docs up -d docs \
+      || die "docker compose could not start the docs container."
+    dport=$PICKED_PORT
+    durl="http://127.0.0.1:$dport"
+    # Wait for mkdocs to actually serve before opening a browser at it. See wait_for_http.
+    say "waiting for mkdocs to build (first run installs it; later runs are quick)..."
+    _wr=0; wait_for_http "$durl" 120 || _wr=$?
+    case "$_wr" in
+      1) say "docs did not answer within 120s. Not opening a browser — see './cr logs docs'." ;;
+      *) open_browser "$durl" ;;
+    esac
+    say "docs on $durl  (./cr down stops it)"
     ;;
 
   shell)  dc exec hub /bin/sh ;;
 
   keys)
+    if [ "${1:-}" = "--set" ]; then
+      set_gemini_key
+      exit 0
+    fi
     # check-keys.py runs INSIDE the container on purpose: it then proves the CONTAINER's
     # egress path to generativelanguage.googleapis.com / api.anthropic.com, which is the one
     # that matters. Running it on the host proves the wrong network.

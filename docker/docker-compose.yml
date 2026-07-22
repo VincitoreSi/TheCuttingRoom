@@ -384,6 +384,17 @@ services:
       HOME: /tmp
       UV_CACHE_DIR: /tmp/uv-cache
       XDG_CACHE_HOME: /tmp/.cache
+      # TMPDIR is /var/tmp and NOT /tmp, and only in this test service. Docker mounts every
+      # tmpfs `noexec` by default (`rw,nosuid,nodev,noexec` — check /proc/mounts), so a file
+      # written under /tmp cannot be executed no matter what its mode bits say. pytest builds
+      # tmp_path from tempfile.gettempdir(), and three ./clean tests copy the script under test
+      # into that directory and run it — which failed with a bare `./clean: Permission denied`
+      # (exit 126) on every `./cr health`, while passing on the host. /var/tmp is on the
+      # container's own writable overlay layer, so it executes.
+      #
+      # This moves the TEST HARNESS, not the product: /tmp stays noexec everywhere, including
+      # here and in the runtime hub, which is the posture worth keeping.
+      TMPDIR: /var/tmp
       # Deliberately NOT UV_OFFLINE=1 — the dev image may legitimately need to resolve.
       UV_OFFLINE: "0"
       # The six entry points' container-mode guard is "TCR_MODE=container in ReelScraper/.env

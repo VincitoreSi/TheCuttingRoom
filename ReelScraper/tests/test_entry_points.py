@@ -21,9 +21,21 @@ CLEAN = REPO / "clean"
 HEALTH = REPO / "health"
 
 
+#: Environment variables that say which lane we are in. They must never reach a test subprocess
+#: by accident: several tests below assert how the HOST-lane guard behaves, and when this suite
+#: runs INSIDE the container (`./cr health`) TCR_CONTAINER=1 is set for every process — so
+#: container_mode_guard correctly declines to block and every one of those assertions fails on
+#: a codebase that is working perfectly. TCR_FORCE_HOST is the same hazard from the other side:
+#: a developer who exported it to bypass the guard would silently disable these tests.
+#: Tests that are *about* these variables pass them explicitly through `env`, which still wins.
+LANE_VARS = ("TCR_CONTAINER", "TCR_FORCE_HOST")
+
+
 def _bash(script, cwd, env=None, **kw):
     """Run a bash -c snippet and hand back the CompletedProcess."""
     e = dict(os.environ)
+    for lane in LANE_VARS:
+        e.pop(lane, None)
     e.update(env or {})
     return subprocess.run(["bash", "-c", script], cwd=str(cwd), env=e,
                           capture_output=True, text=True, **kw)

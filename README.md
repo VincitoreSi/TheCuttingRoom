@@ -43,8 +43,64 @@ Sources ─▶ Scrape ─▶ Analyze(score) ─▶ Media ─▶ AnalysisEngine(b
 
 ## Quick start
 
-You need **Python ≥ 3.10** with [uv](https://docs.astral.sh/uv/), and **Node ≥ 20**
-for the Dashboard. A handful of scripts at the repo root are the whole interface:
+Two lanes, and you only need one.
+
+**Docker** — install nothing but Docker. No uv, no Python, no Node, no ffmpeg:
+
+```bash
+./cr build       # 86s cold, measured; 305.8 MB image / 92 MB to pull
+./cr up          # start the hub and open the browser
+./cr keys --set  # your Gemini key — only needed for blueprints and rendering
+```
+
+**Native** — you already have **Python ≥ 3.10** with [uv](https://docs.astral.sh/uv/) and
+**Node ≥ 20** for the Dashboard:
+
+```bash
+./init          # checks, installs, verifies your Gemini key, launches
+```
+
+Either lane picks a free host port if 8787 is taken and pins its choice in
+`ReelScraper/.env`, so a second clone on the same machine just works and you never have to
+edit a port by hand. One process serves everything — the hub builds the Dashboard into its
+own static directory, so there is no second dev server to run.
+
+### Run it in Docker
+
+One image, one container, and `./cr` as the only host-side command:
+
+```bash
+./cr build       # 86s cold, measured; 305.8 MB image / 92 MB to pull
+./cr up          # start the hub and open the browser (does NOT rebuild)
+./cr keys --set  # enter your Gemini API key; ./cr keys re-checks it
+./cr down        # stop the container; your data is on the bind mount and is untouched
+./cr agent similar-content propose --platform instagram --dry-run
+./cr health --strict --live
+./cr help        # works on a machine with no Docker installed
+```
+
+**Keys.** `./init` is the native lane's key prompt and it needs Python on the host, so the
+container lane has its own: `./cr keys --set` asks once, writes `GEMINI_API_KEY` to
+`AnalysisEngine/.env`, `SimilarContent/.env` and `AutoSearch/.env`, and verifies it from
+inside the container. Discovery spends nothing on it — term expansion is off by default and
+is a one-click opt-in on the Dashboard's Discover tab.
+Scrape, analyze and media need no key at all; only blueprints and captions/render do, so
+`./cr up` mentions a missing key without ever blocking on it. Note that exporting
+`GEMINI_API_KEY` in your shell does **not** reach the container — compose has no `env_file` on
+purpose, so keys are read from those per-agent files.
+
+Your checkout is bind-mounted, so keys stay in each agent's own `.env` and the hub still never
+stores a secret value. Windows is **WSL2 only** — clone inside the WSL2 filesystem; there is no
+`cr.cmd`. The hub has no authentication, so compose publishes it on `127.0.0.1` and `[::1]`
+only: changing that to `"8787:8787"` puts an unauthenticated subprocess launcher on your LAN.
+`./cr verify-loopback` proves the boundary on the machine in front of you.
+
+Full details — per-platform first run, the `./cr` reference, volumes, upgrades, the security
+posture and the known sharp edges — in [Run it in Docker](documentation/docs/docker.md).
+
+### Run it natively
+
+A handful of scripts at the repo root are the whole interface:
 
 ```bash
 ./demo      # a populated studio to look around in — no keys, no scraping, instant
@@ -55,9 +111,7 @@ for the Dashboard. A handful of scripts at the repo root are the whole interface
 ./health    # run every test suite, build, and repository invariant
 ```
 
-Each checks its prerequisites, installs what's missing, picks a free port if 8787 is
-taken, and opens a browser. One process serves everything — the hub builds the
-Dashboard into its own static directory, so there is no second dev server to run.
+Each checks its prerequisites, installs what's missing, and opens a browser.
 
 **`./demo` is the fastest way to understand the project** — *if you have the dataset.* Put
 `demodataset.zip` in the repo root and `./demo` unpacks it and opens on a fully populated
@@ -124,29 +178,6 @@ Each agent (AnalysisEngine, AutoSearch, SimilarContent, …) is its own director
 own `.env.example`; `uv sync` then `uv run cli.py …` inside it. See `./docsite` for the full
 quickstart, API reference, and per-agent guides.
 
-### Run it in Docker
-
-If you'd rather install nothing but Docker — no uv, no Python, no Node, no ffmpeg — there is a
-container lane. One image, one container, and `./cr` as the only host-side command:
-
-```bash
-./cr build      # 86s cold, measured; 305.8 MB image / 92 MB to pull
-./cr up         # start the hub and open the browser (does NOT rebuild)
-./cr down       # stop the container; your data is on the bind mount and is untouched
-./cr agent similar-content propose --platform instagram --dry-run
-./cr health --strict --live
-./cr help       # works on a machine with no Docker installed
-```
-
-Your checkout is bind-mounted, so keys stay in each agent's own `.env` and the hub still never
-stores a secret value. Windows is **WSL2 only** — clone inside the WSL2 filesystem; there is no
-`cr.cmd`. The hub has no authentication, so compose publishes it on `127.0.0.1` and `[::1]`
-only: changing that to `"8787:8787"` puts an unauthenticated subprocess launcher on your LAN.
-`./cr verify-loopback` proves the boundary on the machine in front of you.
-
-Full details — per-platform first run, the `./cr` reference, volumes, upgrades, the security
-posture and the known sharp edges — in [Run it in Docker](documentation/docs/docker.md).
-
 ## What you need, and what runs where
 
 **Nothing here requires Claude Code, an editor, or an AI coding session.** Every stage is a
@@ -169,6 +200,11 @@ A first run that only wants to *look* at the system needs **uv and Python**. Scr
 scoring are free and keyless. Only the AI stages cost anything, and each is opt-in.
 
 `ffmpeg` is optional until you render: `./init` warns if it is missing rather than failing.
+
+The "You need" column describes the **native** lane. In Docker every one of those tools —
+uv, python, node, npm, curl, ffmpeg — is already in the image, so the column collapses to
+"Docker"; only the `GEMINI_API_KEY` rows still apply, because a key is yours and not the
+image's.
 
 ### The full loop, end to end
 

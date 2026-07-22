@@ -102,8 +102,20 @@ say "Secrets live in gitignored per-agent .env files, by name. The hub never sto
 say "secret value — it only ever reports whether one is present."
 printf '\n'
 
-# The Gemini key is used by two agents, each reading its own .env — so it is stored in both.
-GEMINI_FILES=("$ROOT/AnalysisEngine/.env" "$ROOT/SimilarContent/.env")
+# The Gemini key is used by THREE agents, each reading its own .env — so it is stored in all
+# three. AutoSearch was the late arrival: discovery used to want a second, different provider
+# and now standardises on this same key (AutoSearch/engine/gemini.py). It was missing here, so
+# a user who pasted a key into ./init still had none where discovery looks.
+#
+# Writing it to AutoSearch spends NOTHING. Term expansion is gated behind
+# `term_expansion_enabled` (default False, AutoSearch/cli.py:82) and returns early when it is
+# off, so the key sits there unused until the user opts in. Having the key present but idle is
+# what makes that opt-in a single switch rather than a scavenger hunt for a file to edit.
+GEMINI_FILES=(
+  "$ROOT/AnalysisEngine/.env"
+  "$ROOT/SimilarContent/.env"
+  "$ROOT/AutoSearch/.env"
+)
 
 # Prefer a key that already exists over asking again. Once ./init has saved one, a later run
 # finds it here and never re-prompts. Look at the environment first — that is what a run
@@ -151,12 +163,16 @@ else
     # Written in both cases: making someone re-paste a key they already typed is worse than
     # a warning, and an offline machine is a check failure, not a bad key.
     for f in "${GEMINI_FILES[@]}"; do write_key GEMINI_API_KEY "$GEMINI" "$f"; done
-    say "${_D}saved — future ./init runs reuse it. To remove it, delete the GEMINI_API_KEY"
-    say "${_D}line from AnalysisEngine/.env and SimilarContent/.env.${_R}"
+    say "${_D}saved to AnalysisEngine/.env, SimilarContent/.env and AutoSearch/.env — future"
+    say "${_D}./init runs reuse it. To remove it, delete the GEMINI_API_KEY line from all"
+    say "${_D}three.${_R}"
+    say "${_D}Discovery does NOT spend on this key: term expansion is off by default. Turn it"
+    say "${_D}on in the Dashboard (Discover) when you want widened search terms.${_R}"
   else
     warn "skipped — without it the AnalysisEngine cannot write blueprints and"
     say  "  SimilarContent cannot render or caption. Add it later to:"
-    say  "    AnalysisEngine/.env  and  SimilarContent/.env"
+    say  "    AnalysisEngine/.env, SimilarContent/.env and AutoSearch/.env"
+    say  "  (discovery itself is free and keyless — the key only widens its search terms.)"
   fi
 fi
 printf '\n'
