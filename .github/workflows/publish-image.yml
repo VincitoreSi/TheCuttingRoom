@@ -1,0 +1,215 @@
+name: Publish Image
+
+# Publishes the `runtime` target of docker/Dockerfile to the GitHub Container Registry as
+#     ghcr.io/vincitoresi/thecuttingroom:<tag>
+#
+# WHY GHCR AND NOT DOCKER HUB. Docker Hub's free tier rate-limits ANONYMOUS pulls to 100 per
+# six hours per IP — that ceiling is shared by everyone behind a NAT, a university, or a CI
+# provider, so it is a limit on the people trying to run this project, not on the maintainer.
+# GHCR has no pull limit on public images, storage and egress are free, and it authenticates
+# with the workflow's own GITHUB_TOKEN, so there is no PAT to create, store, or rotate.
+#
+# ONE-TIME SETUP AFTER THE FIRST SUCCESSFUL RUN. A new package can land private even under a
+# public repository. Check https://github.com/users/VincitoreSi/packages/container/thecuttingroom/settings
+# and set "Change visibility" to Public, otherwise `docker pull` asks strangers for a login.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual runs publish `edge` + `sha-<short>`, never `latest`. This is how you smoke-test a
+  # change to this file, or to the Dockerfile, without minting a version tag.
+  workflow_dispatch:
+
+# Never cancel a publish that is mid-flight. The two architectures push by digest and a third
+# job stitches them into one manifest; killing the run between those steps leaves orphaned
+# digests in the registry that no tag points at.
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # ghcr.io rejects uppercase path components, and this repository is `VincitoreSi/TheCuttingRoom`.
+  # Hardcoded rather than lowercased from ${{ github.repository }} at runtime so the value is
+  # readable here and in every log line that echoes it.
+  IMAGE: ghcr.io/vincitoresi/thecuttingroom
+
+jobs:
+  # ==========================================================================================
+  # build — one runner per architecture, each pushing an untagged, digest-only image.
+  #
+  # NOT a single `platforms: linux/amd64,linux/arm64` build. That would emulate arm64 through
+  # QEMU on an amd64 runner, and this Dockerfile compiles CPython wheels and builds the
+  # dashboard; under emulation that is a multiplier, not a rounding error. arm64 hosted
+  # runners are free for public repositories, so both halves build natively and in parallel.
+  # ==========================================================================================
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            # `ubuntu-24.04-arm` is free, but only in PUBLIC repositories. If this repo is
+            # ever made private the label stops resolving and the job fails outright.
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker Hub is an INPUT to this build even though nothing is published there:
+      # python:3.12-slim-bookworm, node:20-bookworm-slim and mwader/static-ffmpeg:7.1 all
+      # live there, and a GitHub-hosted runner pulls them anonymously from a shared IP. If
+      # this job ever starts failing on "toomanyrequests", create a free Docker Hub account
+      # and a read-only access token, add DOCKERHUB_USERNAME / DOCKERHUB_TOKEN as repository
+      # secrets, and uncomment this step — authenticating lifts the ceiling to 200/6h and,
+      # more importantly, counts against your account rather than the runner pool's IP.
+      #
+      # - name: Log in to Docker Hub (pull quota only)
+      #   uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4
+      #   with:
+      #     username: ${{ secrets.DOCKERHUB_USERNAME }}
+      #     password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Labels only, in this job — the tags are computed once in `merge`, because a tag has to
+      # name the multi-arch manifest and not either half of it. org.opencontainers.image.source
+      # comes out of this action for free, and it is what links the package to this repository
+      # on the GHCR page.
+      - name: Docker metadata (labels)
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6
+        with:
+          images: ${{ env.IMAGE }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7
+        with:
+          # The repo root, so the root .dockerignore applies — same context docker-compose.yml
+          # gives the `hub` service with `context: ..`.
+          context: .
+          file: docker/Dockerfile
+          # `runtime`, never `dev`. The dev stage carries git, curl, zip and a root shell, and
+          # the Dockerfile says of it: "Never published."
+          target: runtime
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            WITH_FFMPEG=1
+            WITH_DOCS=0
+            FFMPEG_VARIANT=static
+            BUILD_ID=${{ github.sha }}
+          # provenance/sbom OFF, and this is load-bearing rather than a preference. With
+          # attestations on, `push-by-digest=true` publishes an INDEX (image + attestation)
+          # per architecture; `docker buildx imagetools create` in `merge` would then be
+          # asked to nest an index inside an index, which clients reject. Attach provenance
+          # in the merge job with actions/attest-build-provenance if it is ever wanted.
+          provenance: false
+          sbom: false
+          # Scoped per architecture — one shared scope means the two jobs evict each other's
+          # layers on every run and neither ever gets a hit. GitHub's Actions cache is capped
+          # at 10 GB per repository; if these builds start missing, switch to a registry
+          # cache (type=registry,ref=${{ env.IMAGE }}:buildcache-${{ matrix.arch }}), which
+          # is unmetered on GHCR at the cost of an extra tag in the package list.
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      # An empty file named after the digest. The content is the filename; `merge` reads the
+      # directory listing, not the files.
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ==========================================================================================
+  # merge — turn the two digests into one tagged multi-arch manifest.
+  #
+  # Nothing is rebuilt here. `imagetools create` is a registry-side operation: it writes a
+  # manifest list that points at layers already pushed by the build jobs.
+  # ==========================================================================================
+  merge:
+    name: Merge manifest
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # v1.4.2 publishes 1.4.2, 1.4, and latest. `latest=auto` is the action's default and
+      # only fires on a semver tag push, which is why a workflow_dispatch run cannot move
+      # `latest` out from under anyone — it gets `edge` and `sha-<short>` instead.
+      #
+      # No `{{major}}`: this project is pre-1.0, and a bare `0` tag that silently walks across
+      # every breaking 0.x release is worse than not having it.
+      - name: Docker metadata (tags)
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=edge,enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=sha,format=short
+
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${IMAGE}@sha256:%s " *)
+
+      # Proof, in the run log, that the published manifest really carries both architectures.
+      # A merge that silently produced a single-arch manifest is otherwise invisible until an
+      # Apple Silicon user reports that `docker run` picked an amd64 image.
+      - name: Inspect
+        run: |
+          docker buildx imagetools inspect "${IMAGE}:${DOCKER_METADATA_OUTPUT_VERSION}"
