@@ -11,9 +11,10 @@ a video at $0.04 a frame.
 import pytest
 
 from engine.propose import (
-    EASE_LONG_S, EASE_THRESHOLD, ProposeError, automation_threshold, build_recipe,
-    clip_duration, content_id_index, diagnose_ease, rank_targets, recipe_filename,
-    restore_origin, score_ease, score_targets, select_targets, shortcode, Ease, Target,
+    EASE_LONG_S, EASE_THRESHOLD, ProposeError, _is_static_camera, automation_threshold,
+    build_recipe, clip_duration, content_id_index, diagnose_ease, rank_targets,
+    recipe_filename, restore_origin, score_ease, score_targets, select_targets, shortcode,
+    Ease, Target,
 )
 from engine.recipe import RecipeError, parse_recipe
 
@@ -225,12 +226,21 @@ def test_ease_ranks_the_real_analyzed_clips_in_the_expected_order(
 
 
 def _shape(bp):
-    """What the rule can actually see: shots, duration, and the static fraction."""
-    cams = [str(s.get("camera_movement") or "") for s in bp["shots"]]
+    """What the rule can actually see: shots, duration, and the static fraction.
+
+    Cameras are reduced through the SCORER'S OWN predicate, not compared as raw strings.
+    `_is_static_camera` counts "None" as static on purpose — those shots are graphic/text
+    cards with no camera at all — so a clip saying "none" and one saying "static" are the
+    same shape to the rule, and scoring them identically is correct behaviour. Comparing the
+    words instead made this test demand that the scorer distinguish two things it documents
+    itself as deliberately conflating: it passed only while no corpus on disk happened to
+    contain both spellings, then failed on a real 25-blueprint corpus that did.
+    """
+    cams = [_is_static_camera(str(s.get("camera_movement") or "")) for s in bp["shots"]]
     return (len(bp["shots"]),
             round(float((bp.get("video_metadata") or {}).get(
                 "estimated_duration_seconds") or 0), 3),
-            tuple(sorted(c.lower() for c in cams)))
+            tuple(sorted(cams)))
 
 
 def test_the_real_corpus_orders_rather_than_collapsing(blueprints):
