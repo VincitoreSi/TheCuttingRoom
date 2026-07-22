@@ -42,6 +42,7 @@ import openpyxl
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from core.logsetup import setup_logging  # noqa: E402
 from core.atomicio import write_text_atomic, atomic_path  # noqa: E402
+from core.hubevents import HubEvents  # noqa: E402
 from core.stopflag import install_stop_handler, stop_requested, sleep_unless_stopped  # noqa: E402
 
 HERE = Path(__file__).parent
@@ -197,7 +198,10 @@ def fetch_page(user_id, username, max_id):
             raise
     raise RuntimeError("page failed after retries")
 
-def scrape_creator(username, limit):
+def scrape_creator(username, limit, events=None):
+    """`events` is the hub emitter, threaded in rather than reached for through a module
+    global: this function is called directly by tests/test_scrape_resume.py, and a global
+    would make it POST during them."""
     global _req_count
     prof = get_profile(username)
     if not prof or not prof.get("user_id"):
@@ -216,6 +220,15 @@ def scrape_creator(username, limit):
         batch = [x.get("media", x) for x in j.get("items", [])]
         items.extend(batch)
         log.info("page", extra={"creator": username, "page": page, "added": len(batch), "total": len(items)})
+        # The liveness signal, and the only one inside a creator: one creator is ~2 minutes of
+        # silence at 21 pages x a 4-8s delay, which is far past the Dashboard's 45s staleness
+        # threshold. `item.progress` is deliberately NOT one of the six board verbs, so a
+        # chatty heartbeat can never rewrite lane state or item counts — it only proves the
+        # run is alive and carries a moving number.
+        if events:
+            events.emit_throttled("item.progress", content_id=username,
+                                  msg=f"{username}: {len(items)} reels",
+                                  data={"stage": "Scraping", "got": len(items), "of": limit})
         pg = j.get("paging_info") or {}
         max_id = pg.get("max_id") if pg.get("more_available") else None
         if not max_id:
@@ -353,7 +366,8 @@ def main():
     ap.add_argument("--worker", type=int, default=0)
     ap.add_argument("--workers", type=int, default=1)
     args = ap.parse_args()
-    setup_logging("scrape", platform="instagram")
+    run_id = setup_logging("scrape", platform="instagram")
+    events = HubEvents("scrape", run_id=run_id, platform="instagram")
     # Take SIGTERM over before anything is written. The hub's Stop button signals this
     # process group; under the default disposition that would end the run between two
     # bytecodes, which is how reels_raw.json used to end up truncated. With a handler
@@ -404,6 +418,12 @@ def main():
     todo = [c for c in mine if c not in done]
     log.info("plan", extra={"worker": args.worker, "workers": args.workers, "assigned": len(mine),
                             "already_saved": len(mine) - len(todo), "scraping": len(todo)})
+    # `total` is carried on every item.start as well, not only here: the Dashboard's log ring
+    # holds 300 events across ALL agents, so on a long run this record is the first evicted and
+    # a reducer that read the total only from here would go blank exactly when it matters.
+    events.emit("run.start", msg=f"scraping {len(todo)} creators",
+                data={"stage": "Scraping", "total": len(todo), "assigned": len(mine),
+                      "already_saved": len(mine) - len(todo)})
 
     # profile meta (followers etc.) — preserve any already saved, add as we go
     meta_all = {}
@@ -440,10 +460,14 @@ def main():
             stopped = by_request = True
             break
         log.info("creator start", extra={"i": n, "of": len(todo), "creator": c})
+        events.emit("item.start", content_id=c, msg=f"scraping {c}",
+                    data={"stage": "Scraping", "i": n, "of": len(todo)})
         try:
-            prof, items = scrape_creator(c, args.limit)
+            prof, items = scrape_creator(c, args.limit, events)
         except RateLimited as e:
             log.error("CIRCUIT BREAKER — saving partial progress and exiting", extra={"reason": str(e)})
+            events.emit("item.error", level="error", content_id=c,
+                        msg=f"rate limited on {c} — stopping", data={"stage": "Failed"})
             stopped = True
             break
         if prof:
@@ -460,6 +484,17 @@ def main():
         # run simply overwrites when it scrapes them.
         write_text_atomic(meta_json, json.dumps(meta_all, ensure_ascii=False, indent=1))
         save_outputs(out_xlsx, raw_json, all_rows, raw_all, summary)
+        # AFTER save_outputs, so item.done means "on disk", not "fetched".
+        #
+        # A creator that would not resolve is a WARNING that still lands here, never an
+        # item.error: the loop continues, raw_all[c] = [] is saved and the process exits 0.
+        # Emitting an error for it would make one typo'd handle paint the whole floor
+        # "Snapped · scrape" after a run that succeeded — the same false failure the hub
+        # refuses to record for a stop. One event per content_id, always.
+        events.emit("item.done", level="info" if prof else "warning", content_id=c,
+                    msg=f"{c}: {len(items)} reels" + ("" if prof else " (unresolved)"),
+                    data={"stage": "Done", "items": len(items), "resolved": bool(prof),
+                          "reels_total": len(all_rows)})
         # Interruptible: PEP 475 RESUMES a bare time.sleep after the stop handler returns,
         # so the flag alone could not shorten a 10-20s wait and a Stop press would look
         # ignored for up to twenty seconds.
@@ -481,6 +516,14 @@ def main():
              status, len(all_rows), len(summary), added, out_xlsx.name,
              extra={"status": status, "reels": len(all_rows), "creators": len(summary),
                     "new_creators": added, "per_creator": dict(summary)})
+    # level="info" ALWAYS, including a stop. A stop is a normal outcome that flows through
+    # this same final-save path, and the hub deliberately records it as job_stopped and never
+    # job_failed; painting run.end red here would break that promise from the other side. The
+    # circuit-breaker case is already red — it emitted item.error above, which is what turns
+    # the run thread red without lying about the run's own outcome.
+    events.emit("run.end", msg=f"{status} — {len(all_rows)} reels across {len(summary)} creators",
+                data={"status": status, "reels": len(all_rows), "creators": len(summary),
+                      "new_creators": added, "stopped": by_request})
     if args.workers > 1:
         log.info("run `python merge.py` after all workers finish to combine into one xlsx")
 

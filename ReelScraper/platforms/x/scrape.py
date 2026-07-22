@@ -55,6 +55,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from core.hubevents import HubEvents  # noqa: E402
 from core.logsetup import setup_logging  # noqa: E402
 from core.atomicio import write_text_atomic  # noqa: E402
 from core.stopflag import install_stop_handler, stop_requested, sleep_unless_stopped  # noqa: E402
@@ -308,7 +309,7 @@ def _walk_timeline(j):
                             yield "tweet", tw
 
 
-def scrape_creator(handle: str, limit: int):
+def scrape_creator(handle: str, limit: int, events=None):
     user = get_user(handle)
     if not user:
         log.warning("could not resolve handle (suspended/typo/protected)", extra={"handle": handle})
@@ -337,6 +338,10 @@ def scrape_creator(handle: str, limit: int):
                     records.append(rec)
                     new += 1
         log.info("page", extra={"handle": handle, "page": page, "added": new, "total": len(records)})
+        if events:
+            events.emit_throttled("item.progress", content_id=handle,
+                                  msg=f"{handle}: {len(records)} posts",
+                                  data={"stage": "Scraping", "got": len(records), "of": limit})
         if new == 0 or not next_cursor or next_cursor == cursor:
             break
         cursor = next_cursor
@@ -380,7 +385,8 @@ def _load_json(p: Path):
 
 
 def main():
-    setup_logging("scrape", platform="x")
+    run_id = setup_logging("scrape", platform="x")
+    events = HubEvents("scrape", run_id=run_id, platform="x")
     # Own SIGTERM before anything is written: the default disposition kills the process
     # mid-write, and posts_raw.json is this platform's corpus. See core/stopflag.py.
     install_stop_handler()
@@ -422,6 +428,9 @@ def main():
     meta_all = _load_json(meta_path)
     todo = [c for c in creators if c not in posts_all]
     log.info("plan", extra={"assigned": len(creators), "already_saved": len(creators) - len(todo), "scraping": len(todo)})
+    events.emit("run.start", msg=f"scraping {len(todo)} handles",
+                data={"stage": "Scraping", "total": len(todo), "assigned": len(creators),
+                      "already_saved": len(creators) - len(todo)})
 
     stopped = False
     by_request = False
@@ -434,13 +443,22 @@ def main():
             stopped = by_request = True
             break
         log.info("creator start", extra={"i": n, "of": len(todo), "handle": c})
+        events.emit("item.start", content_id=c, msg=f"scraping {c}",
+                    data={"stage": "Scraping", "i": n, "of": len(todo)})
         try:
-            followers, recs = scrape_creator(c, args.limit)
+            followers, recs = scrape_creator(c, args.limit, events)
         except RateLimited as e:
             log.error("CIRCUIT BREAKER — saving partial progress and exiting", extra={"reason": str(e)})
+            events.emit("item.error", level="error", content_id=c,
+                        msg=f"rate limited on {c} — stopping", data={"stage": "Failed"})
             stopped = True
             break
         if recs is None:
+            # Nothing was written for this handle, so unlike instagram's unresolved
+            # creator this really is a failure for it — and it never reaches item.done,
+            # so the one-event-per-content_id rule still holds.
+            events.emit("item.error", level="error", content_id=c,
+                        msg=f"{c}: nothing returned", data={"stage": "Failed"})
             continue
         posts_all[c] = recs
         if followers is not None:
@@ -454,6 +472,9 @@ def main():
         write_text_atomic(meta_path, json.dumps(meta_all, ensure_ascii=False, indent=1))
         write_text_atomic(posts_path, json.dumps(posts_all, ensure_ascii=False, indent=1))
         log.info("creator done", extra={"handle": c, "posts": len(recs)})
+        events.emit("item.done", content_id=c, msg=f"{c}: {len(recs)} posts",
+                    data={"stage": "Done", "items": len(recs),
+                          "reels_total": sum(len(v) for v in posts_all.values())})
         if n < len(todo):
             # Interruptible: PEP 475 resumes a bare sleep after the handler returns, so the
             # flag alone would leave a Stop press looking ignored for the whole delay.
@@ -466,6 +487,9 @@ def main():
               else "STOPPED EARLY (rate limit)" if stopped else "DONE")
     log.info("%s — %d posts across %d handles -> %s", status, total, len(posts_all), posts_path.name,
              extra={"status": status, "posts": total, "handles": len(posts_all)})
+    events.emit("run.end", msg=f"{status} — {total} posts across {len(posts_all)} handles",
+                data={"status": status, "reels": total, "creators": len(posts_all),
+                      "stopped": by_request})
     log.info("next: run `python run.py analyze`")
 
 

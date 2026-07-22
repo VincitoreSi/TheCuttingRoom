@@ -13,6 +13,7 @@ import { activitySummary, liveStageIndex } from "../lib/activityModel";
 import type { ActivitySummary } from "../lib/activityModel";
 import { elapsed } from "../lib/format";
 import { plural } from "../lib/boardCounts";
+import { scrapeProgress } from "../lib/scrapeProgress";
 import { sectionMotion } from "../lib/motion";
 import { Button } from "./ui";
 import { Seam } from "./Seam";
@@ -119,6 +120,9 @@ export function PipelineBoard({
   const { events } = useLogStream(300);
 
   const analyzedCount = analysisQ.data?.filter((b) => !b.is_reference).length ?? 0;
+  // null unless a scrape is actually running — see scrapeProgress for why that gate
+  // matters and why progress is counted in creators rather than reels.
+  const scrapeLive = scrapeProgress(events, jobs, platform);
 
   // Every node reports ITS OWN stage. Sources used to show `creators` and Scrape `items`,
   // both of which are derived from the scored corpus — so a handle added a moment ago read
@@ -127,7 +131,15 @@ export function PipelineBoard({
   const counts: Record<string, string> = {
     discover: pendingQ.data ? `${pendingQ.data.length} pending` : "—",
     sources: summary ? plural(summary.watchlist, "page") : "—",
-    scrape: summary ? plural(summary.scraped_items, "reel") : "—",
+    // While a scrape is live, creators-done is the only number that moves and only ever
+    // forwards; the reel total is disk-derived and lags a whole creator behind. Kept
+    // SHORT because .board__count is ellipsis-clamped inside a 1/8-width flex cell —
+    // "4/12 · 1874 reels" is the one string on this board guaranteed to truncate.
+    scrape: scrapeLive
+      ? `${scrapeLive.done}/${scrapeLive.total} creators`
+      : summary
+        ? plural(summary.scraped_items, "reel")
+        : "—",
     analyze: summary ? `${summary.items} scored · ${summary.viral} viral` : "—",
     media: summary ? `${summary.media_ready} saved` : "—",
     // `summary` is polled every 15s, the analysis query only refetches when a job

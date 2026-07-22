@@ -443,6 +443,20 @@ A curated, cross-agent lifecycle log; every agent's `POST /api/logs` call feeds 
 
 `run_id` links back to the agent's own full-fidelity local JSONL log file. The fine-grained per-item event vocabulary is: `item.start` (`data.stage`), `item.stage` (mid-item transition), `item.error` (routes to the implicit **Failed** lane), and `item.done` (terminal stage; producers include `data.file` for the studio gate-join).
 
+One event sits deliberately **outside** that vocabulary: **`item.progress`**, the liveness
+heartbeat. It is not one of the six verbs the board reducer understands, which is exactly why
+it is safe — the reducer ignores it, so however chatty it gets it can never rewrite lane state
+or per-item counts. Producers emit it per rendered frame; the **`scrape` stage** emits it
+inside a creator, throttled to one every 30s, because a single creator is minutes of silence
+and the alternative is a card that cannot tell running from hung.
+
+`scrape` is the one built-in stage that speaks this protocol. It has no producer manifest and
+no desk — it posts under `agent: "scrape"` with stages `Scraping` / `Done` / `Failed`, and the
+Activity floor and the Board's scrape card read it like any other agent. Its `content_id` is
+the creator handle, and it emits exactly one terminal event per creator: a handle that cannot
+be resolved is an `item.done` at `level: "warning"`, never an `item.error`, because that run
+still saves and still exits 0 and a false failure would report the whole floor as snapped.
+
 ---
 
 ## Evals
