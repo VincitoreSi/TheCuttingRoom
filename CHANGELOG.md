@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-22
+
+### Added
+- **A running scrape now says what it is doing.** The hub spawns a stage as a bare subprocess
+  and drains it with one blocking `communicate()`, so nothing the child printed reached the UI
+  before it exited — and what survived was the last 1200 chars, rendered only if the job
+  ERRORED. A six-minute scrape showed an elapsed clock and nothing else, and "working" was
+  indistinguishable from "hung". The scrapers now post their own lifecycle to `POST /api/logs`
+  (`ReelScraper/core/hubevents.py`), and the Board reads it back as `N/M creators`.
+  - The client is deliberately not a general hub client: it never raises, never retries, and
+    disables itself after three consecutive failures, so telemetry can never become the
+    bottleneck it exists to report on.
+  - **No `BACKEND_API` default.** `cli.py scrape` is a bare passthrough and only `cli.py start`
+    exports the variable, so a default would make a hand-run scrape blind-POST into whatever
+    hub happens to own that port — possibly another checkout's.
+  - The heartbeat is `item.progress`, deliberately **outside** the six board verbs: the server's
+    reducer ignores it, so it can never rewrite lane state however chatty it gets.
+  - The per-creator total rides on `item.start` rather than only `run.start`, because the
+    client ring holds 300 events across all agents and `run.start` is the first record evicted
+    on exactly the long runs the feature exists for.
+
+### Changed
+- **Cleared the dependency queue** — seven open update PRs, five of them contending for the same
+  lockfile. React 18 → 19, recharts 2 → 3, Vite 6 → 8, `@vitejs/plugin-react` 4 → 6,
+  `@tanstack/*`, `astral-sh/setup-uv` v3 → v9, `softprops/action-gh-release` v2 → v3.
+  - `@vitejs/plugin-react@6` peers `vite ^8`, so that one could not land by itself; the Vite
+    major came with it. Vite 8 bundles with Rolldown, which dropped the object form of
+    `manualChunks`, so the chart/motion/query split is ported to the function form.
+  - Two recharts breaks were behavioural rather than cosmetic: a custom tooltip renderer now
+    receives `TooltipContentProps`, and `Bar onClick` hands over a `BarRectangleItem` with the
+    row on `.payload` — the Evals drill-through read the datum directly and would have silently
+    stopped resolving.
+- **`Dashboard/package.json` `engines.node`** now reads `^20.19.0 || >=22.12.0`, which is what
+  Vite 8 and the React plugin actually enforce; `>=20` had been understating it.
+
+### Fixed
+- `Dashboard/package-lock.json` recorded version `1.1.0` against a `1.2.0` `package.json`.
+
 ## [1.2.0] - 2026-07-22
 
 ### Added
@@ -322,7 +360,8 @@ spin those into ready-to-post drafts behind a human gate.
 - Generated media is kept in a separate namespace from the scraped corpus, so a
   producer can never overwrite a real creator's video.
 
-[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/VincitoreSi/TheCuttingRoom/releases/tag/v1.0.0
