@@ -93,7 +93,7 @@ sibling repos — as a subprocess job launched over HTTP, used by the Dashboard'
 POST /api/pipeline/{platform}/{stage}
 ```
 
-`stage` ∈ `scrape`, `analyze`, `media`, `analysis-engine`, `auto-search`,
+`stage` ∈ `scrape`, `analyze`, `media`, `analysis-engine`, `propose`, `auto-search`,
 `auto-search-beat`, `render`. For the first three, the hub shells into the
 commands in the table above. For the rest, it shells into the **sibling repo's
 own CLI**:
