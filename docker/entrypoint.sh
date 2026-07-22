@@ -30,6 +30,36 @@ PYBIN="$HUB/.venv/bin/python"
 say() { printf '%s\n' "$*" >&2; }
 die() { printf 'tcr-entrypoint: %s\n' "$*" >&2; exit 78; }   # 78 = EX_CONFIG
 
+# copy_tree_contents <src> <dst> — copy everything INSIDE src into dst, leaving dst itself
+# alone. Returns non-zero on the first child that fails, so callers keep their `|| die`.
+#
+# `cp -R --preserve=timestamps src/. dst/` is the obvious spelling and it is a trap. The
+# trailing `/.` makes cp treat dst as a copy OF src, so it replays src's timestamps onto dst
+# as well as onto the children — and utimensat() on a directory you do not own is EPERM even
+# when that directory is world-writable. Docker mounts a tmpfs root:root, this container runs
+# as a non-root uid, and mode=1777 grants the right to CREATE ENTRIES inside the directory,
+# never the right to restamp the directory itself.
+#
+# That is not hypothetical: it made every `./cr up` die on the frontend/dist copy, with an
+# error that blamed tmpfs ownership — which was already configured exactly as its own message
+# demanded. The docs copy below has the same shape and survived only because its target is on
+# the bind mount and is therefore owned by us; it goes through here too so the trap cannot be
+# re-armed by a future change of mount type.
+#
+# Copying the CHILDREN avoids all of it: each child is created by us inside dst, so preserving
+# its timestamps needs no privilege we lack. Timestamps on the children are the point (stable
+# Last-Modified/ETag across restarts); the mtime of dist/ itself is not load-bearing.
+copy_tree_contents() {
+  _src=$1 _dst=$2
+  # Three globs, because a plain `*` in POSIX sh skips dotfiles. An unmatched glob expands to
+  # itself, hence the -e guard.
+  for _e in "$_src"/* "$_src"/.[!.]* "$_src"/..?*; do
+    [ -e "$_e" ] || continue
+    cp -R --preserve=timestamps "$_e" "$_dst/" || return 1
+  done
+  return 0
+}
+
 # ------------------------------------------------------------------------------------------
 # Dispatch anything that is not a container start BEFORE the preflight. See the header.
 # ------------------------------------------------------------------------------------------
@@ -163,16 +193,20 @@ fi
 # A tmpfs does NOT solve ownership — it has exactly one. Docker mounts a tmpfs root:root and
 # `mode=` sets bits, not owner, so with `user:` set the mode must be 1777 or this copy fails.
 #
-# `cp -R --preserve=timestamps`, NOT `cp -a`. This is a real bug the drafts had: `cp -a`
-# implies --preserve=all, which includes OWNERSHIP, and a non-root process copying files owned
-# by uid 1000 while running as (say) uid 501 gets EPERM from chown and cp exits non-zero. That
-# would make every Linux run with TCR_UID != 1000 die here. Timestamps are the only preserved
+# `--preserve=timestamps`, NOT `cp -a`. This is a real bug the drafts had: `cp -a` implies
+# --preserve=all, which includes OWNERSHIP, and a non-root process copying files owned by uid
+# 1000 while running as (say) uid 501 gets EPERM from chown and cp exits non-zero. That would
+# make every Linux run with TCR_UID != 1000 die here. Timestamps are the only preserved
 # attribute that matters (stable Last-Modified/ETag across restarts, so the browser does not
 # refetch 1 MB on every container start).
+#
+# And it goes through copy_tree_contents rather than `cp src/. dst/`, because that spelling
+# restamps dst ITSELF and no mode= can grant a non-owner the right to do that. See the
+# function — it is the second half of the same lesson as the `cp -a` paragraph above.
 # ------------------------------------------------------------------------------------------
 if [ -d /opt/tcr/frontend-dist ]; then
   mkdir -p "$HUB/frontend/dist" 2>/dev/null || true
-  cp -R --preserve=timestamps /opt/tcr/frontend-dist/. "$HUB/frontend/dist/" \
+  copy_tree_contents /opt/tcr/frontend-dist "$HUB/frontend/dist" \
     || die "could not write $HUB/frontend/dist as uid $(id -u).
 
 Almost always this is tmpfs OWNERSHIP, not a missing mount. Docker mounts a tmpfs as
@@ -207,7 +241,7 @@ if [ -d /opt/tcr/docs-site ]; then
   mkdir -p "$APP/documentation/site" \
     || die "cannot create $APP/documentation/site — rebuild with WITH_DOCS=0, or fix the
 ownership of the checkout on the host."
-  cp -R --preserve=timestamps /opt/tcr/docs-site/. "$APP/documentation/site/" \
+  copy_tree_contents /opt/tcr/docs-site "$APP/documentation/site" \
     || die "could not write $APP/documentation/site as uid $(id -u). This path is on the
 bind-mounted checkout, not a tmpfs, so it needs to be writable by the container's uid."
 fi

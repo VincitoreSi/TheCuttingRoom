@@ -56,10 +56,12 @@ The first-run path from a clean clone. It verifies `uv`, Python, Node, npm and
 `curl` (and warns if `ffmpeg` is absent, since SimilarContent stitches reels
 with it), syncs every Python project, builds the Dashboard, then handles your
 `GEMINI_API_KEY`. If a key is already present — in the environment or in a
-previous run's `AnalysisEngine/.env` / `SimilarContent/.env` — it is **reused
-without re-prompting** and re-verified against Google; otherwise it prompts,
-verifies the key, and writes it to both `.env` files (telling you where, so you
-can remove it by hand). Skipping the prompt is fine — it tells you exactly where
+previous run's `AnalysisEngine/.env`, `SimilarContent/.env` or `AutoSearch/.env`
+— it is **reused without re-prompting** and re-verified against Google;
+otherwise it prompts, verifies the key, and writes it to all three `.env` files
+(telling you where, so you can remove it by hand). Discovery spends nothing on
+its copy: term expansion is off by default, so the key sits there unused until
+you opt in from the Dashboard's Discover tab. Skipping the prompt is fine — it tells you exactly where
 to add the key later.
 
 You land on an **empty** dashboard. That is the point: no corpus, no proposals,

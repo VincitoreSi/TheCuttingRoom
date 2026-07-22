@@ -80,7 +80,7 @@ export function App() {
                   navigating away and back gives a clean remount rather than a stuck panel. */}
               <ErrorBoundary key={view}>
                 {view === "dashboard" && <Dashboard onNavigate={setView} />}
-                {view === "discover" && <DiscoveryView />}
+                {view === "discover" && <DiscoveryView onNavigate={setView} />}
                 {view === "corpus" && <Corpus onNavigate={setView} />}
                 {view === "sounds" && <SoundsView onNavigate={setView} />}
                 {view === "proposals" && <StudioView onNavigate={setView} />}

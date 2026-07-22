@@ -242,6 +242,11 @@ flowchart LR
 
 Because the manifest also carries `config_schema` (for `GET/PUT /api/config/agent/{agent}`, a schema-driven settings form) and `secrets[]` (resolved against `GET /api/config/agent/{agent}/secrets/status`, which reports presence only — never values), a new producer gets a working settings panel and secrets indicator for free, with no Dashboard code change. This is the practical meaning of "the hub is the single integration point": the frontend integrates with the *registry*, not with any individual agent.
 
+!!! note "Keys & models reads the roster, not the registry"
+    Registration is lazy — an agent registers when its CLI first runs — so on a clean clone the registry is empty. The **Keys & models** panel therefore reads [`GET /api/agents`](api-reference.md#producers), which always carries the built-in agents with their key status computed live, and marks the ones that have never run as *not started yet*. Without it the panel was empty on a fresh install and could say nothing about the key that gates the Blueprint stage — the one thing a first-run user most needs to know.
+
+    The **Discover** tab's cadence panel uses the same roster to decide whether to offer the term-expansion opt-in, since that switch only makes sense once a key is actually resolvable.
+
 !!! tip "Spinning up a new producer"
     The [`_producer-template`](agents-producers.md) scaffold exists precisely so a new producer inherits this for free — copy the template, fill in `agent.json`, and its first successful `POST /api/producers/register` is the only step required before it shows up in the Dashboard.
 

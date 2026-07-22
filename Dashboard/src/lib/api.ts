@@ -12,6 +12,7 @@ import type {
   LogEvent,
   PlatformSummary,
   Producer,
+  AgentRosterEntry,
   Proposal,
   Reel,
   ReferenceItem,
@@ -131,6 +132,8 @@ export const api = {
 
   // Producer registry + per-agent config/secrets.
   producers: () => fetchJson<Producer[]>("/api/producers"),
+  /* Registered AND unregistered agents, with live key status. See AgentRosterEntry. */
+  agents: () => fetchJson<AgentRosterEntry[]>("/api/agents"),
   agentBoard: (name: string, platform?: string): Promise<AgentBoard> =>
     fetchJson<AgentBoard>(
       `/api/agents/${encodeURIComponent(name)}/board${platform ? `?platform=${encodeURIComponent(platform)}` : ""}`,

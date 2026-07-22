@@ -326,8 +326,45 @@ The registry is the pluggability backbone: any agent can self-register and immed
 | Method & path | Purpose |
 |---|---|
 | `POST /api/producers/register` | Idempotent upsert by `name` — a producer manifest. |
-| `GET /api/producers` | Full roster; the Dashboard renders lanes directly from this list. |
+| `GET /api/producers` | Full roster of **registered** producers; the Dashboard renders lanes directly from this list. |
 | `GET /api/producers/{name}` | One producer's manifest. |
+| `GET /api/agents` | Every agent this checkout knows about, **registered or not**, with live secret presence. |
+
+!!! note "`present` is recomputed per request, not replayed"
+    A manifest's `secrets[].present` is what the agent self-reported when it last registered.
+    Serving that verbatim meant a key added afterwards never appeared — and restarting the hub
+    could not help, because the snapshot on disk was unchanged. `GET /api/producers`,
+    `GET /api/producers/{name}` and `secrets/status` all re-evaluate presence against the
+    agent's own `.env` on every request.
+
+    The live check can only ever **add** presence. A live `false` never overrules a
+    self-reported `true`, because the agent resolves sources the hub cannot see — AnalysisEngine
+    accepts `GEMINI_KEY` and `GOOGLE_API_KEY` while its manifest names only `GEMINI_API_KEY`.
+
+`GET /api/agents` exists because `/api/producers` answers *"who has registered"*, which is the
+wrong question for *"is my key set up"*. Registration is lazy — an agent registers inside its
+hub-connect preamble, which only runs when its CLI runs — so on a clean clone the roster is
+empty and there is nothing to say about the key that gates the Blueprint stage. This endpoint
+always carries the built-in agents, with `registered` telling you whether the rest of the
+manifest (`config_schema`, `workflow_stages`) is actually known:
+
+```json title="GET /api/agents"
+[
+  { "name": "analysis-engine", "registered": false, "dir": "AnalysisEngine",
+    "secrets": [{ "name": "gemini_api_key", "env_var": "GEMINI_API_KEY",
+                  "required": true, "present": true }] },
+  { "name": "auto-search", "registered": false, "dir": "AutoSearch",
+    "secrets": [{ "name": "gemini_api_key", "env_var": "GEMINI_API_KEY",
+                  "required": false, "present": true }] },
+  { "name": "similar-content", "registered": true, "kind": "clone",
+    "config_schema": { "…": "…" }, "secrets": [ "…" ] }
+]
+```
+
+`required` mirrors each agent's own manifest. `auto-search` declaring it **optional** is
+deliberate: discovery degrades to keyword-only search without a key and the hub marks that
+stage unconditionally ready, so a required flag there would demand a paid key for a stage that
+never needed one.
 
 ```json title="POST /api/producers/register — ProducerManifest"
 {

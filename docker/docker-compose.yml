@@ -384,6 +384,17 @@ services:
       HOME: /tmp
       UV_CACHE_DIR: /tmp/uv-cache
       XDG_CACHE_HOME: /tmp/.cache
+      # TMPDIR is /var/tmp and NOT /tmp, and only in this test service. Docker mounts every
+      # tmpfs `noexec` by default (`rw,nosuid,nodev,noexec` — check /proc/mounts), so a file
+      # written under /tmp cannot be executed no matter what its mode bits say. pytest builds
+      # tmp_path from tempfile.gettempdir(), and three ./clean tests copy the script under test
+      # into that directory and run it — which failed with a bare `./clean: Permission denied`
+      # (exit 126) on every `./cr health`, while passing on the host. /var/tmp is on the
+      # container's own writable overlay layer, so it executes.
+      #
+      # This moves the TEST HARNESS, not the product: /tmp stays noexec everywhere, including
+      # here and in the runtime hub, which is the posture worth keeping.
+      TMPDIR: /var/tmp
       # Deliberately NOT UV_OFFLINE=1 — the dev image may legitimately need to resolve.
       UV_OFFLINE: "0"
       # The six entry points' container-mode guard is "TCR_MODE=container in ReelScraper/.env
@@ -477,6 +488,23 @@ services:
     # invoking mkdocs directly; the real fix is a DOCS_HOST env var in `docsite` — a source
     # change owned elsewhere.
     command: ["uv", "run", "mkdocs", "serve", "-f", "../documentation/mkdocs.yml", "-a", "0.0.0.0:8000"]
+    # This service MUST declare its own healthcheck, because the image bakes one in
+    # (Dockerfile: HEALTHCHECK) and every container started from that image inherits it. The
+    # baked one probes the HUB on 127.0.0.1:8787 — a port nothing listens on in this
+    # container's namespace — so `./cr docsite` produced a container that served docs happily
+    # and reported `unhealthy` forever, with a failing streak climbing all night. Inheriting a
+    # sibling's liveness probe is worse than having none: anything gating on health (a
+    # depends_on condition, an operator reading `docker ps`) is told the wrong thing.
+    #
+    # `/` answers 302 -> /TheCuttingRoom/; urlopen follows it, so a healthy server lands on
+    # 200. start_period is generous because a cold container installs mkdocs before serving.
+    healthcheck:
+      test: ["CMD", "/app/ReelScraper/.venv/bin/python", "-c",
+             "import urllib.request as u,sys; sys.exit(0 if u.urlopen('http://127.0.0.1:8000/',timeout=4).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
     user: "${TCR_UID:-1000}:${TCR_GID:-1000}"
     init: true
 

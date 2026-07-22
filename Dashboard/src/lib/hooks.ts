@@ -56,6 +56,11 @@ export const useInsights = () => useQuery({ queryKey: ["insights"], queryFn: api
 export const useProducers = () =>
   useQuery({ queryKey: ["producers"], queryFn: api.producers, refetchOnWindowFocus: true });
 
+/* The full agent roster, including agents that have never registered. Refetches on
+   focus so a key added in a terminal shows up when you tab back. */
+export const useAgents = () =>
+  useQuery({ queryKey: ["agents"], queryFn: api.agents, refetchOnWindowFocus: true });
+
 export const useTrending = (p: string) =>
   useQuery({
     queryKey: ["trending", p],

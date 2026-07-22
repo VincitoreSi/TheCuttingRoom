@@ -68,8 +68,27 @@ Docker Desktop 4.x. Nothing else.
 `./cr up` starts one container, polls until `/api/platforms` answers **inside** the container,
 then does one host-side GET of the published port — so it can tell "the hub is broken" from
 "the publish is broken" — and opens `http://127.0.0.1:$HUB_PORT` in your browser. `HUB_PORT`
-is read from `ReelScraper/.env` and defaults to **8787**; a second clone on the same machine
-should be pinned to 8788 there.
+is read from `ReelScraper/.env` and defaults to **8787**.
+
+**You never have to pick that port yourself.** If the host cannot publish on it — another
+checkout's container, a host-lane hub, or some unrelated program — `./cr up` walks 8787–8816,
+starts on the first one that binds, and pins it in `ReelScraper/.env` so `./health`, `./stop`,
+`./cr verify-loopback` and the next `./cr up` all agree. It says so when it moves:
+
+```
+./cr: host port 8787 is held by python3 (pid 68618) running in /Users/you/dev/TheCuttingRoom/ReelScraper; trying the next free one in 8787-8816...
+
+HUB_PORT 8787 was already in use on this host, so ./cr moved to 8788 and pinned
+HUB_PORT=8788 in ReelScraper/.env — ./health, ./stop and the next ./cr up all read it
+from there, so they agree. Nothing inside the container changed; it still serves
+on its own fixed port, and only the host side of the publish moved.
+```
+
+Only the **host** side of the publish moves; the container always serves on 8787 internally.
+This is the same scan-and-pin `claim_port` does for the host lane, over the same range and the
+same `.env` key, so the two lanes cannot disagree about who owns which port. To force a
+specific port, set `HUB_PORT` in `ReelScraper/.env` yourself — a value that binds is always
+honoured, and never silently moved off. `./cr docsite` does the same over 8000–8029.
 
 ### Linux (Docker Engine, not Desktop)
 
@@ -166,6 +185,7 @@ absolute checkout path, pinned into `ReelScraper/.env` as `COMPOSE_PROJECT_NAME`
 | `./cr health [args…]` | Runs `./cr verify-loopback` on the host first and hands the verdict in, then runs `./health` in the **dev** image. Arguments are forwarded **verbatim** and nothing is added — ask for `--strict --live` yourself. |
 | `./cr verify-loopback` | Enumerates the host's non-loopback IPv4 addresses and asserts each is refused while `127.0.0.1:$HUB_PORT` succeeds. Host-side only, and it needs `curl` or `wget`. |
 | `./cr keys` | `scripts/check-keys.py` **inside** the container, so it proves the container's egress path to the model APIs, which is the one that matters. Read-only; spends nothing. |
+| `./cr keys --set` | Prompts for your Gemini key (hidden), writes it to all three agent `.env` files and verifies it from inside the container. This lane's equivalent of `./init`'s prompt — see [Secrets](#secrets). |
 | `./cr shell` | A `/bin/sh` in the running hub container. |
 | `./cr docsite` | Docs live-reload on `http://127.0.0.1:$DOCS_PORT` (default 8000). Stopped by `./cr down`. |
 | `./cr demo` | Loads the demo dataset in the dev image, so `unzip` and `zip` stay off the host requirement list. Starts no hub — reload the one `./cr up` is already running. |
@@ -192,12 +212,42 @@ HTTP hub**, never by touching each other's files.
 
 | Secret | Lives in | Reaches the container via |
 |---|---|---|
-| `GEMINI_API_KEY` | `AnalysisEngine/.env`, `SimilarContent/.env` | **the bind mount only** |
+| `GEMINI_API_KEY` | `AnalysisEngine/.env`, `SimilarContent/.env`, `AutoSearch/.env` | **the bind mount only** |
 | `GEMINI_API_KEY` *(optional)*, Instagram burner session vars | `AutoSearch/.env` | the bind mount only |
 | X `auth_token` + `ct0` | `ReelScraper/platforms/x/session.txt` | the bind mount only (file-only, no env form) |
 
 The whole checkout is bind-mounted at `/app`, so those files are simply *there*, at the paths
 each agent already reads them from. Nothing else is needed to deliver them.
+
+### `./cr keys --set` — the container lane's key prompt
+
+`./init` is the native lane's onboarding, and it cannot serve this one: it calls
+`check_python`, so it needs Python **on the host** — the dependency the container lane exists
+to avoid. `./cr keys --set` is the equivalent:
+
+```sh
+./cr keys --set     # prompts (hidden), writes both files, verifies from inside the container
+./cr keys           # re-check any time; read-only, spends nothing
+```
+
+It writes `GEMINI_API_KEY` to `AnalysisEngine/.env`, `SimilarContent/.env` and
+`AutoSearch/.env` — the same set
+`./init` writes — then runs `check-keys.py` in the container so the check also proves the
+container's egress to Google. An invalid key is reported but still saved, because an offline
+machine is a failed *check*, not a bad key.
+
+**The key never passes through Docker.** It is read on the host, written to the bind-mounted
+files, and picked up by the container *reading those files*. It is never handed to
+`docker exec -e` or to an `env_file`, so it appears in neither `docker inspect` nor
+`docker compose config` — the same reasoning as the deliberately absent `env_file:` block,
+described under **No secrets in `docker/.env`** below.
+
+!!! warning "Exporting the key in your shell does nothing"
+    `export GEMINI_API_KEY=…` on the host does **not** reach the container. Compose has no
+    `env_file` on purpose, so keys travel by bind-mounted file and nothing else. `./cr up`
+    points this out if it sees the variable set while the files are empty.
+
+To do it by hand instead:
 
 ```sh
 printf 'GEMINI_API_KEY=<your key>\n'    >> AnalysisEngine/.env
@@ -254,7 +304,8 @@ touched** — the corpus, media, studio, renders, logs, and every `.env`. Stoppi
 is exactly as safe as `./stop`.
 
 Two things persist per checkout in `ReelScraper/.env`: `HUB_PORT` and
-`COMPOSE_PROJECT_NAME`. That project name is why two clones on one machine cannot collide —
+`COMPOSE_PROJECT_NAME`. `./cr` writes both itself — the project name on first run, the port
+whenever the pinned one turns out to be taken — so neither needs editing by hand. That project name is why two clones on one machine cannot collide —
 compose namespaces volumes by project, and without the pin both clones would derive the same
 name from the directory basename, share all four venvs, and `./cr down` in one would stop the
 other. See [Niches → Running two niches at once](niches.md#running-two-niches-at-once) for the
@@ -505,7 +556,8 @@ the directory exists at import — so a docs rebuild always needs a hub restart.
 
 | Symptom | What it means |
 |---|---|
-| `Bind for 127.0.0.1:8787 failed: port is already allocated` | Another process — possibly another checkout's container — holds that host port. `./cr down`, bump `HUB_PORT` in `ReelScraper/.env`, `./cr up`. The container always serves on 8787 internally; only the host side moves. |
+| `host port 8787 is held by …; trying the next free one` | Not a failure — `./cr` handling one, and naming the holder so you can decide whether you wanted that process running. It walks 8787–8816 and pins the winner; nothing to do. `./cr` never kills the holder — it may belong to another clone, and on this machine it usually does. |
+| `every port from 8787 to 8816 is already in use` | Thirty consecutive busy ports, which is a real situation and not one to paper over with a random port. Free one, or set `HUB_PORT` in `ReelScraper/.env` to a port you know is free. |
 | A bind failure on `[::1]` | IPv6 is disabled on this host. Delete the `[::1]` line from `docker/docker-compose.yml`. **Never** delete the `127.0.0.1:` prefix from the other line. |
 | `the checkout's uv.lock files do not match…` | Dependency skew after a `git pull`. `./cr rebuild`. |
 | `…exists but will not run in this container` | A host virtualenv is showing through the bind mount — usually because a `venv-*` volume line was removed. `./cr rebuild`. |

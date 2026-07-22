@@ -374,7 +374,23 @@ if [ "$LIVE" -eq 1 ]; then
   step "Live smoke test"
   # This checkout's pinned port when it has one, else the shared default. Read rather than
   # claimed: a test gate must not acquire a port pin as a side effect of running.
-  HUB_PORT_PIN="$(read_key HUB_PORT "$ROOT/ReelScraper/.env")"; HUB_PORT_PIN="${HUB_PORT_PIN:-8787}"
+  #
+  # INSIDE THE CONTAINER THE .env VALUE IS THE WRONG NUMBER. HUB_PORT in ReelScraper/.env is
+  # the HOST side of the publish, which ./cr moves whenever 8787 is taken; the container side
+  # is fixed at 8787 forever (docker-compose.yml pins `HUB_PORT: "8787"` in the environment of
+  # both services, and this one shares the hub's netns). Reading the file here made --live
+  # probe a port nothing listens on in this namespace, start a SECOND hub of its own, and then
+  # report `GET / -> 503` — because that improvised hub has no frontend/dist tmpfs. The
+  # failure looked like a broken Dashboard and was really a wrong port.
+  #
+  # So: environment first, file second. TCR_CONTAINER is the discriminator the six entry
+  # points already use, and compose sets it in every service.
+  if [ -n "${TCR_CONTAINER:-}" ]; then
+    HUB_PORT_PIN="${HUB_PORT:-8787}"
+  else
+    HUB_PORT_PIN="$(read_key HUB_PORT "$ROOT/ReelScraper/.env")"
+  fi
+  HUB_PORT_PIN="${HUB_PORT_PIN:-8787}"
   URL="http://127.0.0.1:$HUB_PORT_PIN"
   STARTED=0
   # Reuse a running hub only if it belongs to THIS checkout *and* is running the code on

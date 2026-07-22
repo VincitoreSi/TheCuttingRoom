@@ -24,6 +24,14 @@
     color var(--dur) var(--ease);
   user-select: none;
 }
+/* An icon in a button must never be shrunk. It is a flex item, so it defaults to
+   flex-shrink:1 with min-width:auto, and in a narrow full-width button (the pipeline board's
+   stage cards) the nowrap label wins the fight: the <svg> was squeezed to width 0 and clipped
+   to nothing, while the 8px `gap` beside it survived. That is why "Run analyze" showed no play
+   icon AND sat right of centre, and why "Add pages" sat left of centre — a phantom 8px on one
+   side only. Sizing an icon is the caller's job; flex must not overrule it. */
+.ui-btn > svg { flex: none; }
+
 .ui-btn:active { transform: scale(0.98); }
 .ui-btn:disabled { opacity: 0.45; cursor: not-allowed; pointer-events: none; }
 
