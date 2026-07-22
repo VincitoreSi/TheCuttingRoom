@@ -87,7 +87,12 @@ sequenceDiagram
 
 ## Stage-by-stage notes
 
-**Pull pending.** The queue comes from `GET /api/analysis/{platform}/pending`, filterable by `min_score`, `tier`, `min_duration`, `max_duration`, `content_type`, and `limit`; it also accepts `reanalyze=<content_id>` and `stale=true` to force re-analysis of a specific or aging item. Reference items (`GET /api/reference/{platform}/pending`) are appended to the same run unless `--no-references` is passed.
+**Pull pending.** The queue comes from `GET /api/analysis/{platform}/pending`, ranked by virality before it is sliced, and filterable by `min_score`, `tier`, `min_duration`, `max_duration`, `content_type`, and `limit`; it also accepts `reanalyze=<content_id>` and `stale=true` to force re-analysis of a specific or aging item. Reference items (`GET /api/reference/{platform}/pending`) are appended to the same run unless `--no-references` is passed.
+
+Two of those filters have defaults the agent applies on every run, so a manual Run from the Board is rationed the same way an unattended firing is:
+
+- **`default_limit`** (config, default `10`) caps how many clips one run analyzes when `--limit` is not given. The cascade overrides it per firing with `blueprint_top_pct` of the new clips.
+- **`max_duration_s`** (config, default `30.0`, `0` disables) is the duration veto. It mirrors SimilarContent's `EASE_LONG_S`: a clip at or over 30s can never score as easy to remake, so a blueprint for one is spend the ease gate will never use. It is the only "easy to remake" signal available *before* a blueprint exists — the rest of that score comes from shot count and static-camera fraction, which are read out of the blueprint this stage is deciding whether to pay for.
 
 **Download media.** The clip is fetched from the hub's `/media` static mount (or, if unavailable, via a yt-dlp fallback) into a local temp file before it is handed to Gemini.
 

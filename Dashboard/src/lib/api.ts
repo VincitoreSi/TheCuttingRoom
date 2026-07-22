@@ -103,6 +103,14 @@ export const api = {
       { method: "POST", body: JSON.stringify({ status, note }) },
     ),
 
+  // Remove a REJECTED studio item. 409 for any other status, and 409 when the item has
+  // rendered media — the hub refuses to make clearing a card a way to destroy paid output.
+  deleteStudioItem: (p: string, file: string) =>
+    fetchJson<{ ok: boolean; file: string; deleted: boolean }>(
+      `/api/studio/${p}/${encodeURIComponent(file)}`,
+      { method: "DELETE" },
+    ),
+
   // Producer-generated reels (the Studio "Renders" tab), newest first.
   renders: (p: string, opts?: { file?: string; agent?: string; kind?: string }) => {
     const qs = new URLSearchParams();

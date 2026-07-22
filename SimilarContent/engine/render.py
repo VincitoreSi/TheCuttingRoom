@@ -26,7 +26,7 @@ from engine.recipe import (
     RenderPlan, allocate_durations, cap_frames, compose_frame_prompt, parse_recipe,
 )
 from engine.stitch import (
-    REELS_ASPECT, canvas_for, poster, probe_duration, probe_streams, stitch,
+    REELS_ASPECT, canvas_for, frame_defect, poster, probe_duration, probe_streams, stitch,
     write_frame_manifest,
 )
 
@@ -89,6 +89,47 @@ def plan_frames(plan: RenderPlan, cfg: dict) -> tuple[list, list[float], list[in
     return kept, durations, dropped
 
 
+ANCHOR_ATTEMPTS = 3       # the first generation plus two retries
+
+
+def _clean_anchor(client: NanoBananaClient, prompt: str, aspect: str, raw: bytes,
+                  mime: str | None, path: Path, breaker: CircuitBreaker):
+    """Vet frame 0 BEFORE it becomes the reference for every other frame.
+
+    Anchoring is what makes this worth paying for. A defect anywhere else is one bad frame;
+    a defect in frame 0 is attached to every later generation and the model reproduces it
+    faithfully, so one bad draw becomes N bad draws at ~$0.04 each and the reel still renders,
+    uploads and reaches the human gate looking finished. A real run did exactly that: an
+    identical 143px black band on all six frames.
+
+    Retries are unanchored by construction (frame 0 has nothing to anchor to), so this cannot
+    inherit the defect it is trying to escape. Giving up RAISES rather than proceeding: the
+    whole point is to fail before spending on frames 1..N, and a reel built on a frame we have
+    already judged unusable is not a cheaper outcome than no reel.
+    """
+    for attempt in range(1, ANCHOR_ATTEMPTS + 1):
+        defect = frame_defect(path)
+        if not defect:
+            if attempt > 1:
+                log.info("anchor frame clean on attempt %d/%d", attempt, ANCHOR_ATTEMPTS)
+            return raw, mime, path
+        log.warning("anchor frame rejected on attempt %d/%d: %s", attempt, ANCHOR_ATTEMPTS,
+                    defect)
+        if attempt == ANCHOR_ATTEMPTS:
+            raise ImageError(
+                f"frame 0 still shows {defect} after {ANCHOR_ATTEMPTS} attempts — refusing to "
+                f"anchor the remaining frames on it. Re-run the render; if it keeps happening, "
+                f"the shot prompt is steering the provider into a split composition.")
+        breaker.pace()
+        raw, mime = client.generate_image(prompt, ref_images=None, aspect_ratio=aspect)
+        breaker.record_success()
+        nxt = path.with_suffix(".jpg" if "jpeg" in (mime or "") else ".png")
+        if nxt != path:
+            path.unlink(missing_ok=True)
+        nxt.write_bytes(raw)
+        path = nxt
+
+
 def render_frames(client: NanoBananaClient, plan: RenderPlan, shots: list, cfg: dict,
                   work: Path, breaker: CircuitBreaker,
                   on_progress=None) -> list[Path]:
@@ -137,6 +178,8 @@ def render_frames(client: NanoBananaClient, plan: RenderPlan, shots: list, cfg: 
         path.write_bytes(raw)
         out.append(path)
         if not anchors:
+            raw, mime, path = _clean_anchor(client, prompt, aspect, raw, mime, path, breaker)
+            out[-1] = path                             # a retry may change the extension
             anchors = [(raw, mime or "image/png")]     # frame 0 is the identity anchor
         if on_progress:
             on_progress(i + 1, len(shots), shot)

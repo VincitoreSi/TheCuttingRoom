@@ -69,7 +69,7 @@ The board is organized around the pipeline's stages and the hub's resource group
 | Board | `POST /api/pipeline/{platform}/{stage}`, `.../run-all`, `GET /api/pipeline/status`, `GET /api/platforms` | the live pipeline tape — launch stage jobs and watch them flow node-to-node (see [The Board](#the-board)) |
 | Corpus | `GET /api/corpus/{platform}/*`, `GET /api/content/{platform}`, `GET /api/analysis/{platform}[/{content_id}]` | factors, top-N viral clips, the scored content board, and schema_version-2 blueprint breakdowns |
 | Sounds | `GET /api/audio/{platform}/trending`, `.../sound/{audio_id}` | trending-sound table and per-sound detail |
-| Studio + Gate | `GET/POST /api/studio/{platform}`, `POST /api/studio/{platform}/{file}/status`, `POST /api/studio/{platform}/{file}/render`, `GET /api/renders/{platform}` | producer proposals, the human approve/reject gate, and the rendered reels (see [The Studio](#the-studio-proposals-renders)) |
+| Studio + Gate | `GET/POST /api/studio/{platform}`, `POST /api/studio/{platform}/{file}/status`, `DELETE /api/studio/{platform}/{file}`, `POST /api/studio/{platform}/{file}/render`, `GET /api/renders/{platform}` | producer proposals, the human approve/reject gate, removing a rejected card, and the rendered reels (see [The Studio](#the-studio-proposals-renders)) |
 | Producers | `GET /api/producers`, `GET /api/reference/{platform}` | registered producers & analyzers on the floor, plus reference clips |
 | Discovery | `GET /api/discovery/{platform}[/pending]`, `POST /api/discovery/{platform}/{candidate_id}/status` | AutoSearch candidates and the human gate that appends to `pages.txt` |
 | Agent Desk | `GET /api/agents/{name}/board` | per-agent live workflow lanes (this page's focus) |

@@ -108,6 +108,11 @@ export const IconX = (p: P) => (
     <path d="M6 6l12 12M18 6L6 18" />
   </I>
 );
+export const IconTrash = (p: P) => (
+  <I {...p}>
+    <path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13M10 11v6M14 11v6" />
+  </I>
+);
 export const IconArrowRight = (p: P) => (
   <I {...p}>
     <path d="M5 12h14M13 6l6 6-6 6" />

@@ -607,7 +607,21 @@ def rank_targets(targets: list[Target], count: int,
                 return (not t.ease.eligible, -t.ease.score, -t.virality_score)
         else:
             def key(t):
-                return (-t.virality_score, -t.ease.score)
+                # Un-blueprinted LAST, ahead of virality. Without this the backfill happily
+                # leads with the highest-scoring clip the analyzer has not reached yet, and
+                # every field it needs is missing: the recipe comes out ~800 bytes with
+                # "shots: unknown (not analyzed yet)" and an empty shot list, `recipe.py`
+                # refuses to render it, and the pick has displaced a clip that could have
+                # been made. Virality is known for every scored row, blueprint or not, so it
+                # is exactly the clips the paid stage has NOT reached that the backfill
+                # reaches for first.
+                #
+                # A preference, not a filter: with no blueprints at all — a corpus mid-way
+                # through its first analysis, which is the normal state — a hard filter
+                # returns nothing and the run says only that it found nothing. Ordered last,
+                # they still appear when there is genuinely nothing else, and still carry the
+                # "no blueprint (duration-only)" line that says why.
+                return (t.blueprint is None, -t.virality_score, -t.ease.score)
         rest = sorted((t for t in targets if id(t) not in chosen), key=key)
         picks += rest[: count - len(picks)]
     return picks

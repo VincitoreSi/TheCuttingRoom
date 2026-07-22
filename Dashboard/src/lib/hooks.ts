@@ -248,6 +248,17 @@ export function useSetStudioStatus(p: string) {
   });
 }
 
+/** Remove a rejected studio item, then refresh the list. The hub is the authority on what
+    may go: it refuses anything not `rejected`, and anything holding rendered media. */
+export function useDeleteStudioItem(p: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { file: string }) => api.deleteStudioItem(p, v.file),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["studio", p] }),
+    onError: (e, v) => toastForError(`Could not remove ${v.file}`, e),
+  });
+}
+
 /** Kick a render for one approved studio item. Progress arrives over SSE on the
     `${platform}:render:${file}` job key; the render record itself lands when the
     job settles (useInvalidateOnJobDone), so this only nudges the list optimistically. */

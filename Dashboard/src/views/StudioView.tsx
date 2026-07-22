@@ -6,6 +6,7 @@ import {
   useRenderProgress,
   useRenderStudioItem,
   useRenders,
+  useDeleteStudioItem,
   useSetStudioStatus,
   useStudio,
 } from "../lib/hooks";
@@ -14,7 +15,7 @@ import { RenderSwatch } from "../components/RenderSwatch";
 import { RenderModal } from "../components/RenderModal";
 import { Badge, Button, Card, EmptyState, Eyebrow, SectionHead } from "../components/ui";
 import { Markdown } from "../lib/markdown";
-import { IconCheck, IconStudio, IconX } from "../components/icons";
+import { IconCheck, IconStudio, IconTrash, IconX } from "../components/icons";
 import { statusTone } from "../lib/statusTone";
 import { sectionMotion } from "../lib/motion";
 import { humanizeAgent } from "../lib/agents";
@@ -43,6 +44,7 @@ export function StudioView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }
   const studioQ = useStudio(platform);
   const rendersQ = useRenders(platform);
   const setStatus = useSetStudioStatus(platform);
+  const removeItem = useDeleteStudioItem(platform);
   const runRender = useRenderStudioItem(platform);
   const reduced = useReducedMotion();
   // live "frame n/total" per studio file, folded off the shared log SSE channel
@@ -166,6 +168,10 @@ export function StudioView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }
           onClose={() => setOpen(null)}
           onDecide={(status) => {
             setStatus.mutate({ file: open.file, status });
+            setOpen(null);
+          }}
+          onRemove={() => {
+            removeItem.mutate({ file: open.file });
             setOpen(null);
           }}
         />
@@ -330,10 +336,12 @@ function ProposalModal({
   proposal,
   onClose,
   onDecide,
+  onRemove,
 }: {
   proposal: Proposal;
   onClose: () => void;
   onDecide: (status: string) => void;
+  onRemove: () => void;
 }) {
   const status = proposal.status ?? "draft";
   const audioBlock = extractSection(proposal.text, "Audio");
@@ -387,7 +395,16 @@ function ProposalModal({
               Close
             </Button>
             <div className="flex-1" />
-            {status !== "rejected" && (
+            {/* Remove replaces Reject once the item IS rejected, so the destructive slot
+                never holds two different destructive verbs at once. The hub is the authority
+                on whether it may actually go — it refuses an item holding rendered media —
+                so this offers the action and reports the refusal rather than second-guessing
+                it here with a rule that would have to be kept in sync. */}
+            {status === "rejected" ? (
+              <Button variant="danger" onClick={onRemove}>
+                <IconTrash size={15} /> Remove
+              </Button>
+            ) : (
               <Button variant="danger" onClick={() => onDecide("rejected")}>
                 <IconX size={15} /> Reject
               </Button>
