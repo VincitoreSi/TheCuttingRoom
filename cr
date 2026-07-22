@@ -389,6 +389,34 @@ wait_for_http() {
   return 1
 }
 
+# register_producers — break the producer bootstrap deadlock, once, after the hub answers.
+#
+# Registration is LAZY BY DESIGN: an agent POSTs its manifest inside its own hub-connect
+# preamble, so it registers only when its own CLI runs. That is fine for `analyze` and
+# `analysis-engine` — the hub hardcodes their argv in STAGE_CMD (app.py) and the Board can
+# launch them with nothing registered, after which they register themselves.
+#
+# It DEADLOCKS for a producer. The only two hub routes that would ever run SimilarContent are
+# `propose` and `render`, and both resolve the working directory through `_producer_dir`
+# (app.py), which refuses any agent that has not already registered. So on a fresh container
+# the Board's Propose button could only ever answer
+#     no registered producer declares proposes:true — start the producer agent once
+# and the only escape was a terminal inside the container, which is the exact dependency this
+# lane exists to remove. The host lane hid the same deadlock behind ./init's printed
+# "cd SimilarContent && uv run cli.py propose" — an instruction, not a mechanism.
+#
+# `register` POSTs a manifest and exits: it reads no corpus, spends nothing, and the hub
+# upserts by name, so running it on every `up` is idempotent and costs a subprocess.
+#
+# Never fatal. A producer that cannot register is a Propose button that explains itself; it is
+# not a reason to fail a hub that is already serving.
+register_producers() {
+  for _p in SimilarContent; do
+    dc exec -T hub sh -c "cd /app/$_p && exec uv run cli.py register" >/dev/null 2>&1 ||
+      say "could not register producer $_p — Propose will say so until it registers"
+  done
+}
+
 # The three agents that read the Gemini key, each from its OWN .env. The same set ./init
 # writes, deliberately and in lockstep: one lane must not leave the other half-configured.
 #
@@ -577,6 +605,11 @@ If the image does not exist yet, run ./cr build."
         # PUBLISH, which is the half that can silently be wrong (a dropped 127.0.0.1: prefix,
         # an IPv6-only browser, a port collision reported in a way we did not parse). Check
         # the host side too, and say WHICH half failed.
+        #
+        # Producers register HERE, against the in-netns probe rather than the host one: the
+        # deadlock this clears is inside the container, and it must be cleared even on the
+        # `hg -eq 2` path below where the publish could not be verified from this host.
+        register_producers
         host_get "$url/api/platforms" 3 && hg=0 || hg=$?
         if [ "$hg" -eq 0 ]; then
           say ""

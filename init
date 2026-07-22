@@ -241,6 +241,30 @@ fi
 sync_backend_api "$URL"
 ok "agents in this checkout point at $URL"
 
+# Register the producers, now that BACKEND_API is final and the hub is answering.
+#
+# Registration is LAZY BY DESIGN: an agent POSTs its manifest inside its own hub-connect
+# preamble, so it registers only when its own CLI runs. `analyze` and `analysis-engine` reach
+# that preamble on their own — the hub hardcodes their argv in STAGE_CMD (app.py) and the Board
+# can launch them with nothing registered.
+#
+# A producer cannot. The only two hub routes that would run SimilarContent are `propose` and
+# `render`, and both resolve the working directory through `_producer_dir` (app.py), which
+# refuses any agent that has not already registered — so the Board's Propose button could only
+# ever answer "no registered producer declares proposes:true". Step 3 below used to be the only
+# thing that broke that cycle, which made a printed instruction load-bearing.
+#
+# `register` POSTs a manifest and exits: no corpus, no spend, and the hub upserts by name, so
+# this is idempotent across re-runs. Never fatal — a producer that cannot register is a Propose
+# button that explains itself, not a reason to fail a setup that otherwise succeeded.
+for p in SimilarContent; do
+  if ( cd "$ROOT/$p" && uv run cli.py register ) >/dev/null 2>&1; then
+    ok "registered producer $p"
+  else
+    warn "could not register producer $p — Propose will say so until it registers"
+  fi
+done
+
 open_browser "$URL"
 banner "$URL" "Ready — an empty studio."
 say "${_D}Next:${_R}"
