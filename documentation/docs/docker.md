@@ -397,6 +397,44 @@ resolves `localhost` to `::1` first gets a connection failure. On a Linux host b
 IPv6 disabled that line can hard-fail `./cr up`; `./cr up` maps that error explicitly, and the
 rule is **delete the `[::1]` line, never the `127.0.0.1:` prefix on the other one**.
 
+### The address the hub binds is not the address it advertises
+
+Because the container must bind the wildcard, the hub would once **print** that wildcard back
+at you as its own URL:
+
+```
+HUB_URL=http://0.0.0.0:8787
+```
+
+That link does not work in a browser. It is not a connection problem — `curl` fetches it
+happily, because the kernel treats the unspecified address as loopback — but Chrome has
+**refused to navigate to it since v128**, when blocking it became a security fix in its own
+right (a public address that resolves to "this machine" is a way for a web page to reach your
+local services). A blocked navigation renders as `about:blank`, so it read as a broken page
+rather than a refused one, and typing `localhost:8787` by hand worked.
+
+`cli.py` now separates the two ideas: it binds whatever `HUB_HOST` says, and advertises a
+**dialable** address derived from it. A wildcard bind — IPv4 or IPv6 — is advertised as
+loopback. That address is what gets printed, logged, and exported as `BACKEND_API` to every
+stage the hub spawns.
+
+Set `HUB_ADVERTISE` only when the hub is reachable under a name or address it cannot infer
+from its own socket — behind a reverse proxy, or deliberately published to a LAN address:
+
+```yaml
+environment:
+  HUB_ADVERTISE: "hub.example.internal"
+```
+
+It overrides the derivation entirely. It changes **nothing** about what the hub binds or who
+can reach it; it is a display and service-discovery value, not a network control.
+
+!!! note "No browser opens by itself in a container"
+    The container entrypoint passes `--no-browser` unconditionally, because there is no
+    browser inside the image for `webbrowser.open()` to reach. On the host lane
+    (`./init`, `cli.py start`) one still opens automatically. From `docker run`, open the
+    printed URL yourself.
+
 ### Check it on the machine in front of you
 
 ```sh

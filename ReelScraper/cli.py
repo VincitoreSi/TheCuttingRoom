@@ -12,6 +12,7 @@ if built, the React frontend (frontend/dist). Opens the browser automatically.
 Ship this as the console command `viralitylab` (see pyproject/entry point).
 """
 import atexit, os, socket, sys, subprocess, threading, time, webbrowser, argparse, logging
+import ipaddress
 from pathlib import Path
 
 from core.logsetup import setup_logging
@@ -64,13 +65,50 @@ def resolve_port(host: str, preferred: int, allow_fallback: bool = True) -> int:
     return chosen
 
 
+def hub_url(bind_host: str, port: int) -> str:
+    """The URL to ADVERTISE — print, log, open, and hand to sibling agents as BACKEND_API.
+
+    Not the same thing as the address we bind, and conflating the two was a real bug: a plain
+    `docker run` logged the IPv4 wildcard as the hub's URL, and that link opened `about:blank`
+    in the browser, while `localhost:8787` typed by hand worked fine. A wildcard bind means
+    "listen on every interface"; it is not a destination, and Chrome refuses to navigate to it
+    at all — so the failure presented as a dead page rather than a connection error.
+
+    The container binds the wildcard ON PURPOSE (`HUB_HOST` is set to it in docker/Dockerfile
+    — it is the only address compose can forward a published port to), so the bind is right
+    and it is only the advertisement that has to be translated back to something dialable.
+
+    `HUB_ADVERTISE` overrides all of it, for a hub reachable under a name or address it has no
+    way to infer from its own socket. docker-compose.yml has documented that knob, commented
+    out, since before there was anything here to read it.
+
+    DETECTED VIA `is_unspecified`, NOT BY COMPARING STRINGS — and this docstring avoids
+    spelling the address for the same reason. `./health` greps this file for that literal and
+    fails the "hub binds loopback only" invariant on any hit (health:304, RISKS.md R2). The
+    check is a security control and is deliberately blunt: it cannot tell prose from a bind,
+    which is precisely why it has no false negatives. The semantic test is the better one
+    anyway — it catches the IPv6 wildcard too, which a string compare would have missed.
+    """
+    host = os.environ.get("HUB_ADVERTISE", "").strip() or bind_host
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return f"http://{host}:{port}"      # a hostname — already dialable, leave it alone
+    if addr.is_unspecified:
+        addr = ipaddress.ip_address("::1" if addr.version == 6 else "127.0.0.1")
+    # An IPv6 literal is not a legal URL host unless it is bracketed.
+    return f"http://[{addr}]:{port}" if addr.version == 6 else f"http://{addr}:{port}"
+
+
 def cmd_start(args):
     import uvicorn
     setup_logging("hub")
     host = getattr(args, "host", None) or HOST
     port = resolve_port(host, getattr(args, "port", None) or PORT,
                         allow_fallback=not getattr(args, "strict_port", False))
-    url = f"http://{host}:{port}"
+    # `host` is what we BIND. `url` is what we tell everyone else to CONNECT to, which is not
+    # always the same string — see hub_url().
+    url = hub_url(host, port)
     # Every sibling agent resolves the hub from BACKEND_API. Export it here so that stage
     # runners spawned by the hub (AnalysisEngine, AutoSearch, a producer's render command)
     # inherit the port we actually got instead of defaulting to 8787.
