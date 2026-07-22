@@ -713,7 +713,7 @@ Mounts resolve in registration order, so the specific ones are registered before
 |---|---|
 | `/media/*` | Static, range-request-capable mount serving `ROOT/media/` — the **scraped corpus**: local video/thumbnail files for inline board playback. |
 | `/renders/*` | Static, range-request-capable mount serving `ROOT/renders/` — **producer-generated** reels, kept structurally separate from the corpus (see [Renders](#renders-producer-generated-media)). Range requests are what let the Studio play them inline. |
-| `/documentation/*` | Static mount serving this MkDocs site from `documentation/site/`, **mounted only if that directory exists at hub startup**. Build it with `./docs --build`, then restart the hub — the check happens once, at import time. |
+| `/documentation/*` | Static mount serving this MkDocs site from `documentation/site/`, **mounted only if that directory exists at hub startup**. Build it with `./docsite --build`, then restart the hub — the check happens once, at import time. |
 | `/favicon.ico` | Route (not a mount), registered before `/`. Serves `frontend/dist/favicon.ico`; 308-redirects to `favicon.svg` for older builds that shipped only the SVG; 404 if the frontend is not built. |
 | `/` | Serves the built Dashboard from `ROOT/frontend/dist`. Resolved **per request**: when `frontend/dist/index.html` is absent it returns a self-refreshing "Building the dashboard…" page with **HTTP 503** (not a static one-time page), which reloads itself and starts serving the app the moment the build lands — no hub restart needed. |
 | `/docs` | FastAPI's auto-generated interactive contract (Swagger UI) — every request body above is a typed Pydantic model, so this stays exactly in sync with the live API. |
