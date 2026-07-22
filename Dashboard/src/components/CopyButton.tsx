@@ -21,7 +21,7 @@ export function CopyButton({
   block?: boolean;
 }) {
   const [done, setDone] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   useEffect(() => () => clearTimeout(timeoutRef.current), []);
 

@@ -248,7 +248,7 @@ per-platform and persist across hub restarts.
 
 ## Dashboard tour
 
-The Dashboard ("The Cutting Room") is a React 18 + TypeScript + Vite control board. It reads and controls everything over HTTP only — there is no separate state store to keep in sync.
+The Dashboard ("The Cutting Room") is a React 19 + TypeScript + Vite control board. It reads and controls everything over HTTP only — there is no separate state store to keep in sync.
 
 | Tab | What it shows |
 |---|---|

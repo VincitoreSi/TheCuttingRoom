@@ -14,7 +14,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { TooltipProps } from "recharts";
+// recharts 3 split the tooltip's own props from the props handed to a custom `content`
+// renderer: `TooltipProps` is what you pass to <Tooltip>, `TooltipContentProps` is what the
+// renderer receives (and it is the one that carries `active` and `payload`).
+import type { TooltipContentProps } from "recharts";
 import { useEvals, usePageVisible, useReducedMotion } from "../lib/hooks";
 import {
   Badge,
@@ -35,6 +38,7 @@ import {
   bySeries,
   criterionEntries,
   criterionMeans,
+  type CriterionStat,
   facets,
   fixQueue,
   recordScore,
@@ -527,7 +531,14 @@ export function EvalsView({ onNavigate }: { onNavigate: (v: ViewKey) => void }) 
                         dataKey="mean"
                         radius={[0, 3, 3, 0]}
                         cursor="pointer"
-                        onClick={(d: { worstRecord: EvalRecord }) => drillToRecord(d.worstRecord)}
+                        // recharts 2 spread the datum onto the click argument, so
+                        // `d.worstRecord` read straight through. recharts 3 hands over a
+                        // `BarRectangleItem` — the rectangle's geometry — and parks the row
+                        // that produced it on `.payload`, untyped. Hence the narrowing.
+                        onClick={(d) => {
+                          const row = d.payload as CriterionStat | undefined;
+                          if (row?.worstRecord) drillToRecord(row.worstRecord);
+                        }}
                       >
                         {criterionData.map((d) => (
                           <Cell key={d.criterion} fill={scoreColor(d.mean)} />
@@ -757,7 +768,7 @@ const evalTooltipStyle: React.CSSProperties = {
   color: "var(--ink)",
 };
 
-function EvalTooltipContent({ active, payload }: TooltipProps<number, string>) {
+function EvalTooltipContent({ active, payload }: TooltipContentProps) {
   if (!active || !payload || !payload.length) return null;
   return (
     <div style={evalTooltipStyle}>

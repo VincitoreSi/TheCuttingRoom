@@ -10,7 +10,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { TooltipProps } from "recharts";
+// recharts 3: `TooltipContentProps` is what a custom `content` renderer receives; the older
+// `TooltipProps` now describes only what <Tooltip> itself accepts.
+import type { TooltipContentProps } from "recharts";
 import { useShell } from "../App";
 import { useFactors, useInsights, useNow, usePageVisible, useReducedMotion } from "../lib/hooks";
 import { Badge, Card, EmptyState, Eyebrow, SectionHead } from "../components/ui";
@@ -493,7 +495,7 @@ const ladderTooltipStyle: React.CSSProperties = {
   color: "var(--ink)",
 };
 
-function LadderTooltip({ active, payload }: TooltipProps<number, string>) {
+function LadderTooltip({ active, payload }: TooltipContentProps) {
   if (!active || !payload || !payload.length) return null;
   const r = payload[0].payload as LadderRow;
   return (

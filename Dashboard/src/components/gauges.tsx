@@ -18,7 +18,7 @@ export function CountUp({
 }) {
   const reduced = useReducedMotion();
   const [val, setVal] = useState(reduced ? to : 0);
-  const raf = useRef<number>();
+  const raf = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (reduced) {

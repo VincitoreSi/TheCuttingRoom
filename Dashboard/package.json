@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.2.0",
   "type": "module",
-  "description": "The Cutting Room — control board for the local content-virality pipeline",
+  "description": "The Cutting Room \u2014 control board for the local content-virality pipeline",
   "license": "MIT",
   "engines": {
     "node": ">=20"
@@ -19,27 +19,27 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@tanstack/react-query": "^5.62.0",
-    "@tanstack/react-virtual": "^3.11.0",
+    "@tanstack/react-query": "^5.101.4",
+    "@tanstack/react-virtual": "^3.14.7",
     "framer-motion": "^11.15.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "recharts": "^2.15.0"
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "recharts": "^3.10.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.0.0",
-    "@types/react": "^18.3.18",
-    "@types/react-dom": "^18.3.5",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
     "eslint": "^10.7.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.3",
-    "prettier": "^3.9.5",
+    "prettier": "^3.9.6",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",
-    "typescript-eslint": "^8.64.0",
-    "vite": "^6.0.5",
+    "typescript-eslint": "^8.65.0",
+    "vite": "^8.1.5",
     "vitest": "^4.1.10"
   }
 }

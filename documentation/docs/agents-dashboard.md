@@ -1,6 +1,6 @@
 # Agent: Dashboard
 
-**"The Cutting Room"** is the control board for the pipeline: a React 18 + TypeScript + Vite single-page app, styled with Tailwind v4 and animated with Framer Motion, that reads and drives every stage of the pipeline over HTTP. It renders producer lanes, the human gate, sounds, blueprints, activity, and discovery — and it never touches another agent's files. Every fact on screen comes from `/api/*` on the [hub](architecture.md).
+**"The Cutting Room"** is the control board for the pipeline: a React 19 + TypeScript + Vite single-page app, styled with Tailwind v4 and animated with Framer Motion, that reads and drives every stage of the pipeline over HTTP. It renders producer lanes, the human gate, sounds, blueprints, activity, and discovery — and it never touches another agent's files. Every fact on screen comes from `/api/*` on the [hub](architecture.md).
 
 !!! note "Nothing here is agent-specific"
     The Dashboard has no hardcoded knowledge of SimilarContent, AnalysisEngine, or AutoSearch. It renders whatever the [producer registry](agents-producers.md) reports. This is the whole point of the design — see [Registry-driven pluggability](#registry-driven-pluggability).
