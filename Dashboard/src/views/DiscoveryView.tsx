@@ -163,12 +163,20 @@ function CadencePanel({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
      and model pickers. The old copy here sent people to "Config (The Bench)", where no such
      control exists. */
   /* PUT the FULL merged config with one flag flipped, mirroring AgentConfigForm's semantics —
-     a partial PUT would drop every other knob. */
-  function setFlag(key: string) {
+     a partial PUT would drop every other knob.
+
+     TAKES THE VALUE. This used to hardcode `true`, and the two buttons below rendered only
+     while their flag was false — so each was a one-way latch: the panel that offered
+     "Use Gemini to widen terms" had nothing to click once you had. The switch-off did exist,
+     as a <Switch> in AgentConfigForm behind "Budget & cadence", but a spend switch you can
+     arm here and can only disarm somewhere else is a trap — and it is worse for THIS pair
+     than for most, because one of them is the kill-switch and the other is the only control
+     in the product that starts spending money on a schedule. */
+  function setFlag(key: string, value: boolean) {
     save.mutate({
       ...(cfgQ.data?.defaults ?? {}),
       ...(cfgQ.data?.config ?? {}),
-      [key]: true,
+      [key]: value,
     });
   }
 
@@ -239,25 +247,31 @@ function CadencePanel({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
           the same agent config AgentConfigForm edits, so offer them here and keep the full
           budget/window form one click away. */}
       <div className="cadence-panel__actions">
-        {!enabled && (
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={save.isPending}
-            onClick={() => setFlag("discovery_enabled")}
-          >
-            {save.isPending ? "Saving…" : "Turn discovery on"}
-          </Button>
-        )}
-        {hasGemini && !expansionOn && (
+        {/* Both buttons stay MOUNTED once their flag is on, and say how to undo it. Rendering
+            them only while the flag was false is what made each switch one-way. */}
+        <Button
+          variant={enabled ? "outline" : "primary"}
+          size="sm"
+          disabled={save.isPending}
+          onClick={() => setFlag("discovery_enabled", !enabled)}
+        >
+          {save.isPending ? "Saving…" : enabled ? "Turn discovery off" : "Turn discovery on"}
+        </Button>
+        {/* Gated on hasGemini, not on the flag: without a key there is nothing to opt into.
+            Still shown while ON so the spend can be stopped from where it was started. */}
+        {hasGemini && (
           <Button
             variant="outline"
             size="sm"
             disabled={save.isPending}
-            title="Spends one Gemini call per run to widen the search terms"
-            onClick={() => setFlag("term_expansion_enabled")}
+            title={
+              expansionOn
+                ? "Stop spending a Gemini call per run; discovery stays on, keyword-only"
+                : "Spends one Gemini call per run to widen the search terms"
+            }
+            onClick={() => setFlag("term_expansion_enabled", !expansionOn)}
           >
-            Use Gemini to widen terms
+            {expansionOn ? "Stop widening with Gemini" : "Use Gemini to widen terms"}
           </Button>
         )}
         <Button variant="ghost" size="sm" onClick={openCadenceForm}>
