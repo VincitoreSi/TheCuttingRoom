@@ -606,8 +606,8 @@ export function ConfigView() {
               Keywords stay here because this is the file they live in. */}
           <SectionHead eyebrow="Discovery" title="Auto-expand the niche" />
           <p className="text-[13px] text-[var(--ink-dim)] mb-3">
-            These keywords feed the auto-search agent. Turning discovery on or off — and the
-            budget it runs to — lives on the Discover page, with the agent that reads them.
+            These keywords feed the auto-search agent. Turning discovery on or off — and the budget
+            it runs to — lives on the Discover page, with the agent that reads them.
           </p>
           <Eyebrow className="mb-2">Keywords</Eyebrow>
           <div className="chips mb-3">
