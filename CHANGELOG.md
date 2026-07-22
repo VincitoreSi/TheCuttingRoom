@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-22
+
+### Added
+- **Published container images.** Every `v*` tag builds `linux/amd64` and `linux/arm64` on
+  native runners and pushes one multi-arch manifest to `ghcr.io/vincitoresi/thecuttingroom`
+  (~190 MB compressed, public, no login). GHCR and not Docker Hub because Docker Hub
+  rate-limits anonymous pulls to 100 per six hours per IP — a limit on the people trying to
+  run this, not on the maintainer. Manual runs publish `edge` + `sha-<short>` and can never
+  move `latest`.
+- **`blueprint_top_pct`** (cascade, default 20) — what share of one firing's *new* clips get a
+  paid blueprint. Its own field rather than a reuse of `blueprint_pct`, which is the trigger
+  cadence `_cascade_steps` derives the funnel invariant from: one number meaning both is the
+  same trap as `media_pct: 60` sitting beside `download_media.py --top 60`. Sized against the
+  clips that triggered the firing, never the corpus, and it rounds up and floors at 1 so a
+  boundary that fired can never advance its watermark over clips nothing looked at.
+- **`max_duration_s`** (analysis-engine config, default 30, 0 disables) — the duration veto,
+  and the only "easy to remake" signal that exists *before* a blueprint does. 65 of the ease
+  score's 100 points come from shot count and static-camera fraction, both read out of the
+  blueprint this stage decides whether to pay for. It lives in the agent's own config, not the
+  cascade, so a manual Run from the Board obeys it too.
+- **`DELETE /api/studio/{platform}/{file}`** — remove a rejected card. Rejected only; the
+  `gate.jsonl` audit trail is appended to rather than touched; and an item holding rendered
+  media is refused with the route that deletes media on purpose, so tidying a list can never
+  destroy paid output.
+
+### Fixed
+- **Producers could never register.** The Board's Propose button could only ever answer "no
+  registered producer declares proposes:true" — a bootstrap deadlock, not a stale registry.
+  Registration is lazy, and a producer's only two hub routes (`propose`, `render`) both resolve
+  through `_producer_dir`, which refuses anything unregistered. Nothing in the product could
+  perform the first registration. `./init` and `./cr` now do it once the hub answers.
+- **A black bar down a rendered reel.** Not stitching: frame 0 came back from the provider with
+  a band in it, and frame 0 is the reference for every later frame, so all six carried it at
+  identical columns. Frame 0 is now vetted before it earns that job — retries are unanchored by
+  construction, and giving up raises rather than spending on frames 1..N.
+- **Recipes with no shot list.** With the ease gate starved, ranking falls through to a virality
+  backfill, and virality is known for every scored row whether or not the analyzer reached it —
+  so the backfill reached first for exactly the clips that had no blueprint, producing recipes
+  `recipe.py` then refuses to render. Un-blueprinted now sorts last; a preference, not a filter.
+- **Two Dashboard controls that could only be switched on.** `setFlag` hardcoded `true` and both
+  Discovery buttons unmounted once their flag was set, so the discovery kill-switch and the
+  Gemini term-expansion spend switch were one-way latches.
+- **Two controls named "discovery" that were never connected.** Config wrote
+  `niche_config.discovery.enabled`, read only by `discover.py` — which the hub, `./cr` and
+  `./init` never launch. It governed a script the Dashboard cannot run while sitting above
+  keywords that do reach the agent. Removed; the agent's kill-switch owns the Discover page.
+- **The desk tag painted outside its card.** Both flex items were non-shrinking, so on an
+  eight-node track "Blueprint" + "DESK →" exceeded the card. Glyph-only now.
+- **A render guard that read the wrong root under test.** `tests/conftest.py` repoints `ROOT`,
+  `MEDIA`, `PRODUCERS_FILE`, `LOGS_FILE` and `FRONTEND` — not `RENDERS`, which is bound at
+  import — so a guard reading that constant consulted the developer's real renders directory.
+
+### Changed
+- Per-creator scrape caps 250/200 → **100** across all three platforms, their `niche_config.json`,
+  the four niche templates and the scrapers' own fallbacks, so switching niches cannot silently
+  restore the old number. `default_limit` 15 → **10**; `propose_count` 3 → **5**.
+
 ## [1.1.0] - 2026-07-22
 
 ### Added
@@ -265,6 +322,7 @@ spin those into ready-to-post drafts behind a human gate.
 - Generated media is kept in a separate namespace from the scraped corpus, so a
   producer can never overwrite a real creator's video.
 
-[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/VincitoreSi/TheCuttingRoom/releases/tag/v1.0.0

@@ -79,18 +79,38 @@ One image, one container, and `./cr` as the only host-side command:
 ./cr help        # works on a machine with no Docker installed
 ```
 
-**Prebuilt images.** Every `v*` tag publishes a multi-arch image (`linux/amd64` +
-`linux/arm64`) to the GitHub Container Registry, so you can skip the build:
+### Run it from the published image
+
+Every `v*` tag publishes a multi-arch image (`linux/amd64` + `linux/arm64`) to the GitHub
+Container Registry — ~190 MB compressed. It is public: no `docker login`, no account.
 
 ```bash
-docker pull ghcr.io/vincitoresi/thecuttingroom:latest   # or :edge for the tip of main
+docker run --rm -p 8787:8787 ghcr.io/vincitoresi/thecuttingroom:latest
+# then open http://127.0.0.1:8787
 ```
 
-`./cr build` stays the supported path for running it — the container needs the repo
-bind-mounted at `/app` for its data, and `./cr` is what wires that up. GHCR rather than Docker
-Hub because Docker Hub rate-limits anonymous pulls to 100 per six hours **per IP**, which is a
-limit on the people trying to run this, not on the maintainer; GHCR has no pull limit on public
-images.
+That is the whole thing — the hub answers in about two seconds and serves the Dashboard on
+the same port. `--rm` is deliberate in that line, because **nothing you do in it survives the
+container.** It starts as a clean, empty studio: no watchlist, no corpus, no keys. It is the
+"show me what this is" path, not the "use it" path.
+
+Tags: `latest` and `1.2` / `1.2.0` come from a release; `edge` and `sha-<short>` come from a
+manual run against `main`. Docker picks your architecture automatically.
+
+**To actually use it, clone the repo and run `./cr up` instead.** Not a formality — the
+container needs the checkout bind-mounted at `/app`, because every data path lives *inside*
+the tree, interleaved with source (`platforms/instagram/content.json` sits next to
+`scrape.py`). There is no subset of directories you can mount to get persistence without it.
+`./cr` also pins the port, wires `GEMINI_API_KEY` in from the per-agent `.env` files, and
+mounts the four named volumes that mask the host `.venv`s — which is a correctness
+requirement on Apple Silicon, not a speed one (see the comment in `docker/docker-compose.yml`).
+
+`./cr build` builds locally rather than pulling; the published image's job is to let someone
+else skip that build entirely when they just want to look.
+
+GHCR and not Docker Hub because Docker Hub rate-limits anonymous pulls to 100 per six hours
+**per IP** — a limit on the people trying to run this, not on the maintainer. GHCR has no pull
+limit on public images.
 
 **Keys.** `./init` is the native lane's key prompt and it needs Python on the host, so the
 container lane has its own: `./cr keys --set` asks once, writes `GEMINI_API_KEY` to
