@@ -284,9 +284,10 @@ the hub is deeply coupled to the scraper's `core/`, per-platform data, and
 subprocess pipeline control.
 
 It prefers **127.0.0.1:8787** but does not insist on it: if that port is taken it binds a free
-one, prints `HUB_URL=…`, and exports `BACKEND_API` so every agent it spawns follows. `./init`
-goes further and *pins* the port a checkout owns (`HUB_PORT` in `ReelScraper/.env`), so a
-second clone settles on 8788 and stays there. Override with `--port` / `--host` or
+one, prints `HUB_URL=…`, and exports `BACKEND_API` so every agent it spawns follows. Both
+lanes go further and *pin* the port a checkout owns (`HUB_PORT` in `ReelScraper/.env`) — `./init`
+on the host, `./cr up` in the container, over the same 8787–8816 range and the same key, so
+they cannot disagree about who owns which port. A second clone settles on 8788 and stays there. Override with `--port` / `--host` or
 `HUB_PORT` / `HUB_HOST`. Agents resolve the hub from `BACKEND_API`, so nothing hardcodes a
 port. The hub binds loopback only — it is a local tool, not a server.
 
@@ -340,9 +341,9 @@ keywords, virality weights, tiers, and seed pages live in
 See [`niches/README.md`](niches/README.md) for the schema and how to add one.
 
 **Two niches at once = two clones.** They cannot interfere. Nothing here writes outside its
-own directory, so the only thing two checkouts share is the loopback — and `./init` settles
-that: it pins a port per checkout (8787, then 8788) in `ReelScraper/.env` and points every
-agent's `BACKEND_API` at its own hub. Agents verify it too, refusing to run against another
+own directory, so the only thing two checkouts share is the loopback — and both lanes settle
+that: `./init` and `./cr up` each pin a port per checkout (8787, then 8788) in
+`ReelScraper/.env`, and `./init` points every agent's `BACKEND_API` at its own hub. Agents verify it too, refusing to run against another
 checkout's hub rather than writing this niche's work into that one's corpus. The Dashboard
 sidebar names the niche, since two boards otherwise look identical.
 
