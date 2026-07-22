@@ -658,6 +658,40 @@ def _secret_present(env_var: str, agent_dir) -> bool | None:
     return _env_file_declares(agent_dir / ".env", {env_var})
 
 
+def _secrets_with_live_presence(agent: str, manifest: dict) -> list:
+    """A manifest's declared secrets, with `present` re-evaluated NOW.
+
+    The registry stores a DECLARATION (name, env_var, required) — which is stable — next to a
+    `present` flag, which is not: it is whatever was true the last time the agent registered.
+    Serving that flag verbatim is how `GET /api/producers` came to report `GEMINI_API_KEY:
+    present=false` for an agent whose key was sitting in SimilarContent/.env, verified, while
+    `GET /api/config/agent/similar-content/secrets/status` said `true` about the same key at
+    the same moment. The Dashboard's "N agents missing keys" badge reads the first one, so
+    setting a key and restarting the hub changed nothing — the snapshot on disk was unchanged.
+
+    See agent_secrets_status for why the two answers are OR-ed and never AND-ed: the AGENT can
+    resolve sources the hub cannot see, so a live `False` must not overrule a self-reported
+    `True`. The live check can only ever ADD presence.
+    """
+    agent_dir = _agent_env_dir(agent, manifest)
+    out = []
+    for s in (manifest.get("secrets") or []):
+        present = bool(s.get("present")) or bool(_secret_present(s.get("env_var"), agent_dir))
+        out.append({"name": s.get("name"), "env_var": s.get("env_var"),
+                    "present": present, "required": s.get("required", True)})
+    return out
+
+
+def _manifest_with_live_secrets(agent: str, manifest: dict) -> dict:
+    """`manifest` with its secrets' presence recomputed. Returns a copy; never mutates the
+    registry, which must keep holding what the agent actually said."""
+    if not manifest.get("secrets"):
+        return manifest
+    out = dict(manifest)
+    out["secrets"] = _secrets_with_live_presence(agent, manifest)
+    return out
+
+
 def _gemini_key_present() -> bool:
     """Is a Gemini key reachable by the agents that need one? PRESENCE ONLY."""
     if any(os.environ.get(v) for v in GEMINI_ENV_VARS):
@@ -1380,9 +1414,73 @@ def register_producer(body: ProducerManifest):
 @app.get("/api/producers")
 def list_producers():
     """The producer roster (Dashboard renders lanes from this). New producers appear here
-    automatically the moment they register."""
+    automatically the moment they register.
+
+    Secret presence is recomputed per request — the stored flag is a snapshot of registration
+    time, and the Dashboard's "missing keys" badge is built from this response."""
     reg = _read_json(PRODUCERS_FILE, {})
-    return list(reg.values())
+    return [_manifest_with_live_secrets(name, m) for name, m in reg.items()]
+
+
+# What each built-in agent is KNOWN to want, used ONLY until that agent registers and
+# supersedes it with its own manifest. It is not a second source of truth: the moment an agent
+# POSTs /api/producers/register, its manifest wins for every field.
+#
+# It exists because registration is lazy — each agent registers inside its hub-connect
+# preamble (AnalysisEngine/cli.py, AutoSearch/cli.py), which only runs when that agent's CLI
+# runs. On a fresh clone nobody has run them, so the roster was empty and the Dashboard could
+# not say anything at all about the key that gates the Blueprint stage. "I have not been told"
+# and "there is no key" are different answers, and the UI could not tell them apart.
+#
+# `required` mirrors each manifest exactly, and the auto-search entry is the load-bearing one:
+# it is False on purpose. Discovery degrades to keyword-only search without a key, and the hub
+# marks that stage unconditionally ready — declaring it required once made the Dashboard demand
+# a paid key for a stage that never needed one. See the comment in AutoSearch/cli.py.
+KNOWN_AGENT_SECRETS = {
+    "analysis-engine": [
+        {"name": "gemini_api_key", "env_var": "GEMINI_API_KEY", "required": True},
+    ],
+    "auto-search": [
+        {"name": "gemini_api_key", "env_var": "GEMINI_API_KEY", "required": False},
+        {"name": "ig_sessionid", "env_var": "IG_SESSIONID", "required": False},
+    ],
+    "similar-content": [
+        {"name": "image_provider_key", "env_var": "GEMINI_API_KEY", "required": True},
+    ],
+}
+
+
+@app.get("/api/agents")
+def list_agents():
+    """Every agent this checkout knows about, registered or not, with live secret presence.
+
+    /api/producers answers "who has registered", which is the right question for rendering
+    producer lanes and the wrong one for "is my key set up". This answers the second: the
+    built-in trio always appears, so a clean install can show that AnalysisEngine needs a
+    GEMINI_API_KEY before anything has ever been run.
+
+    `registered` is reported rather than hidden — an unregistered agent's config_schema and
+    workflow stages genuinely are unknown, and the UI must be able to say so instead of
+    implying the agent is broken.
+    """
+    reg = _read_json(PRODUCERS_FILE, {})
+    out = []
+    for agent in sorted(set(AGENT_DIRS) | set(reg)):
+        manifest = reg.get(agent)
+        if manifest:
+            out.append({**_manifest_with_live_secrets(agent, manifest),
+                        "name": agent, "registered": True})
+            continue
+        agent_dir = _agent_env_dir(agent)
+        out.append({
+            "name": agent,
+            "registered": False,
+            "dir": AGENT_DIRS.get(agent),
+            # Live only: there is no self-report to OR against until it registers.
+            "secrets": [{**s, "present": bool(_secret_present(s["env_var"], agent_dir))}
+                        for s in KNOWN_AGENT_SECRETS.get(agent, [])],
+        })
+    return out
 
 
 @app.get("/api/producers/{name}")
@@ -1390,7 +1488,9 @@ def get_producer(name):
     reg = _read_json(PRODUCERS_FILE, {})
     if name not in reg:
         raise HTTPException(404, f"no producer {name}")
-    return reg[name]
+    # Same live recompute as the list endpoint — one producer must not answer differently
+    # from the roster it appears in.
+    return _manifest_with_live_secrets(name, reg[name])
 
 
 # ---------------- agent workflow board (per-agent live task board) ----------------
@@ -1929,13 +2029,7 @@ def agent_secrets_status(agent):
     reg = _read_json(PRODUCERS_FILE, {})
     if agent not in reg:
         raise HTTPException(404, f"no producer {agent}")
-    agent_dir = _agent_env_dir(agent, reg[agent])
-    out = []
-    for s in (reg[agent].get("secrets") or []):
-        present = bool(s.get("present")) or bool(_secret_present(s.get("env_var"), agent_dir))
-        out.append({"name": s.get("name"), "env_var": s.get("env_var"),
-                    "present": present, "required": s.get("required", True)})
-    return out
+    return _secrets_with_live_presence(agent, reg[agent])
 
 
 # ---------------- pipeline control + live status ----------------
