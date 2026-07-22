@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-07-22
+
 ### Fixed
 - **The hub advertised an address browsers refuse to open.** From `docker run`, it printed
   `HUB_URL=http://0.0.0.0:8787` and logged the same for `/docs` — and both opened
@@ -375,7 +377,8 @@ spin those into ready-to-post drafts behind a human gate.
 - Generated media is kept in a separate namespace from the scraped corpus, so a
   producer can never overwrite a real creator's video.
 
-[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/VincitoreSi/TheCuttingRoom/compare/v1.0.0...v1.1.0
