@@ -1,6 +1,6 @@
 {
   "niche": "Fashion",
-  "posts_per_creator": 200,
+  "posts_per_creator": 100,
   "_note": "X virality differs: reposts/quotes are the reach engine and velocity matters more (fast decay). Weights tuned accordingly.",
   "virality": {
     "weights": { "reach_multiplier": 0.30, "outlier_score": 0.25, "engagement_rate": 0.25, "velocity": 0.20 },

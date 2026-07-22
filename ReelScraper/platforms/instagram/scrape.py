@@ -26,7 +26,7 @@ USAGE (run from inside this folder):
 
 OPTIONS:
   --file PATH     input file: .txt (one handle/URL per line) or .xlsx (handles auto-detected)
-  --limit N       max reels per creator (default: niche_config.reels_per_creator, else 250)
+  --limit N       max reels per creator (default: niche_config.reels_per_creator, else 100)
   --out NAME      output xlsx name (default Reels_Data.xlsx)
   --worker i      this worker's index (for parallel runs)
   --workers N     total number of workers (default 1)
@@ -348,7 +348,7 @@ def main():
     ap.add_argument("handles", nargs="*", help="instagram handles or profile URLs")
     ap.add_argument("--file", help="input file (.txt or .xlsx)")
     ap.add_argument("--limit", type=int, default=None,
-                    help="max reels per creator (default: niche_config.reels_per_creator, else 250)")
+                    help="max reels per creator (default: niche_config.reels_per_creator, else 100)")
     ap.add_argument("--out", default="Reels_Data.xlsx")
     ap.add_argument("--worker", type=int, default=0)
     ap.add_argument("--workers", type=int, default=1)
@@ -361,12 +361,12 @@ def main():
     # boundary — where everything is already on disk.
     install_stop_handler()
 
-    # reel limit: CLI wins, else niche_config.json, else 250
+    # reel limit: CLI wins, else niche_config.json, else 100
     if args.limit is None:
         args.limit = 250
         try:
             cfg = json.loads((HERE / "niche_config.json").read_text(encoding="utf-8"))
-            args.limit = int(cfg.get("reels_per_creator") or 250)
+            args.limit = int(cfg.get("reels_per_creator") or 100)
         except Exception:
             pass
 

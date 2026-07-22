@@ -8,7 +8,7 @@ niche: Football
 platforms:
 
   instagram:
-    reels_per_creator: 250
+    reels_per_creator: 100
     discovery:
       keywords:
         - football
@@ -44,7 +44,7 @@ platforms:
       - "@example.freestyle.fc"
 
   x:
-    posts_per_creator: 200
+    posts_per_creator: 100
     # X is the live-reaction feed for football — reposts explode fastest here, so velocity
     # is the single heaviest signal.
     weights:
@@ -63,7 +63,7 @@ platforms:
       - "@ex_footy_clips"
 
   youtube:
-    shorts_per_creator: 200
+    shorts_per_creator: 100
     # Shorts still slow-burn, but match clips spike, so velocity is lifted above Fashion.
     weights:
       reach_multiplier: 0.35

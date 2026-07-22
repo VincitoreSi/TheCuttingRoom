@@ -195,16 +195,6 @@ export function ConfigView() {
     setSaved(false);
   }
 
-  function toggleDiscovery(on: boolean) {
-    setCfg((c) => {
-      const next = structuredClone(c!);
-      next.discovery = next.discovery ?? emptyDiscovery();
-      next.discovery.enabled = on;
-      return next;
-    });
-    setSaved(false);
-  }
-
   // The watchlist persists on edit — pinning a handle and navigating away used to lose it
   // (it only reached the hub on a separate "Save to hub" click), which also left the pipeline
   // with no creators to scrape. A pages-only PUT writes pages.txt without touching
@@ -538,6 +528,36 @@ export function ConfigView() {
             </Eyebrow>
           </div>
 
+          {/* The paid boundary's QUOTA, and the exact counterpart of propose_count above:
+              blueprint_pct in the funnel decides WHEN analysis-engine fires, this decides how
+              much it processes once it does. It is the top slice, not an arbitrary one — the
+              pending queue is ranked by virality before it is sliced. The companion knob, the
+              duration veto for clips too long to ever be "easy to remake", is max_duration_s
+              on the analysis-engine desk, because it has to apply to a manual Run too. */}
+          <div className="flex items-center gap-3 flex-wrap mb-3">
+            <label className="text-[13px] text-[var(--ink-dim)]" htmlFor="cascade-blueprint-top">
+              Share of new clips blueprinted per firing
+            </label>
+            <Input
+              id="cascade-blueprint-top"
+              type="number"
+              className="w-20"
+              value={cascadeText("blueprint_top_pct")}
+              min={CASCADE_LIMITS.blueprint_top_pct.min}
+              max={CASCADE_LIMITS.blueprint_top_pct.max}
+              aria-label="Share of new clips blueprinted per firing"
+              onChange={(e) =>
+                setCascadeDrafts((p) => ({ ...p, blueprint_top_pct: e.target.value }))
+              }
+              onBlur={(e) => commitCascade("blueprint_top_pct", e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+            />
+            <Eyebrow>
+              {CASCADE_LIMITS.blueprint_top_pct.min}–{CASCADE_LIMITS.blueprint_top_pct.max}% ·
+              highest virality first · PAID
+            </Eyebrow>
+          </div>
+
           {/* A stored configuration the hub refuses to run reports itself here, in its own
               words — the toggle above reads false while this is set, and that is the reason. */}
           {cascadeRow?.problem && (
@@ -572,20 +592,22 @@ export function ConfigView() {
       {/* discovery */}
       <motion.div {...sectionMotion(6, reduced)}>
         <Card className="p-5">
-          <SectionHead
-            eyebrow="Discovery"
-            title="Auto-expand the niche"
-            right={
-              <Switch
-                checked={cfg.discovery?.enabled ?? false}
-                onChange={toggleDiscovery}
-                label="Enable discovery"
-              />
-            }
-          />
+          {/* NO enable switch here, deliberately. This card edits niche_config.json, whose
+              `discovery.enabled` is read by exactly one thing — platforms/<p>/discover.py:142
+              — and that script is never launched by the hub, ./cr or ./init; it is a manual
+              CLI path, and STAGE_CMD carries only auto-search and auto-search-beat. So the
+              switch that used to sit here governed something the Dashboard cannot run, while
+              sitting directly above keywords that DO reach the agent (AutoSearch/cli.py:221
+              reads discovery.keywords, and pointedly not discovery.enabled).
+
+              Two controls both labelled "discovery", in two views, backed by two files, that
+              nothing keeps in agreement — and they were observed disagreeing. The agent's
+              kill-switch is `discovery_enabled` in its own config, and DiscoveryView owns it.
+              Keywords stay here because this is the file they live in. */}
+          <SectionHead eyebrow="Discovery" title="Auto-expand the niche" />
           <p className="text-[13px] text-[var(--ink-dim)] mb-3">
-            Off by default — the run only analyzes handpicked pages. Discovery needs a burner
-            session and is opt-in.
+            These keywords feed the auto-search agent. Turning discovery on or off — and the budget
+            it runs to — lives on the Discover page, with the agent that reads them.
           </p>
           <Eyebrow className="mb-2">Keywords</Eyebrow>
           <div className="chips mb-3">

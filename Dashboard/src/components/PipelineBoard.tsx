@@ -228,10 +228,22 @@ export function PipelineBoard({
                   <div className="font-display text-[17px] leading-none">{node.label}</div>
                   {/* desk affordance for nodes whose bottom slot is taken by the
                       Run button — makes the whole-card "open desk" click visible
-                      (Studio has no Run, so it uses the bottom link-hint instead). */}
+                      (Studio has no Run, so it uses the bottom link-hint instead).
+
+                      GLYPH ONLY, no "desk" label. Both this span and its sibling
+                      label are non-shrinking flex items (.board__desk-tag is
+                      `flex: none`; the label has no min-width:0), so the row's
+                      width is the sum of its content — and on an eight-node track
+                      "Blueprint" + "DESK →" is wider than the card, which painted
+                      the tag outside the right border. The alternative, letting the
+                      label shrink, renders "Bluepri…" at this width and is worse:
+                      the label is the card's identity, the tag is decoration. The
+                      word carried no information the arrow doesn't — the whole card
+                      is already role="button" — and it was aria-hidden, so no
+                      assistive tech ever read it. */}
                   {node.agentDesk && node.stage && (
                     <span className="board__desk-tag" aria-hidden="true">
-                      desk <IconArrowRight size={10} />
+                      <IconArrowRight size={10} />
                     </span>
                   )}
                 </div>

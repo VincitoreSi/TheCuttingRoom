@@ -8,7 +8,7 @@ niche: Cricket
 platforms:
 
   instagram:
-    reels_per_creator: 250
+    reels_per_creator: 100
     discovery:
       keywords:
         - cricket
@@ -44,7 +44,7 @@ platforms:
       - "@example.gully.cricket"
 
   x:
-    posts_per_creator: 200
+    posts_per_creator: 100
     # Ball-by-ball reactions repost fast during live matches — velocity leads on X.
     weights:
       reach_multiplier: 0.28
@@ -62,7 +62,7 @@ platforms:
       - "@ex_ipl_daily"
 
   youtube:
-    shorts_per_creator: 200
+    shorts_per_creator: 100
     weights:
       reach_multiplier: 0.38
       outlier_score: 0.30

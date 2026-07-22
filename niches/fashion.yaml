@@ -19,7 +19,7 @@ platforms:
 
   instagram:
     # Max reels pulled per creator (maps to niche_config "reels_per_creator").
-    reels_per_creator: 250
+    reels_per_creator: 100
 
     # Discovery is Instagram-only and OFF by default. `keywords` drive keyword search;
     # `seeds` drive seed-expansion (related profiles). Both feed AutoSearch / discover.py.
@@ -67,7 +67,7 @@ platforms:
 
   x:
     # Max posts pulled per creator (maps to niche_config "posts_per_creator").
-    posts_per_creator: 200
+    posts_per_creator: 100
 
     # X reach is repost/quote-driven and decays fast, so velocity carries more weight.
     weights:
@@ -90,7 +90,7 @@ platforms:
 
   youtube:
     # Max Shorts pulled per creator (maps to niche_config "shorts_per_creator").
-    shorts_per_creator: 200
+    shorts_per_creator: 100
 
     # Shorts have no share/save signal and views are slow-burn, so reach vs subscribers
     # and outlier vs channel median dominate; velocity is down-weighted.

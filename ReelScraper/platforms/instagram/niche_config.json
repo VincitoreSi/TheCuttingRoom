@@ -1,6 +1,6 @@
 {
   "niche": "Fashion",
-  "reels_per_creator": 250,
+  "reels_per_creator": 100,
 
   "_comment_discovery": "Auto-discovery of MORE pages in this niche. OFF by default — the default run only analyzes the handpicked links in pages.txt. Search + seed-expand require a burner sessionid in session.txt (Instagram gates search behind login); guest mode alone cannot search. Tweak keywords/seeds/limits here, or just tell Claude what niche to target and it will rewrite this block.",
   "discovery": {

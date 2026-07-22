@@ -620,6 +620,14 @@ export interface CascadeRow {
       NOT the same thing as `propose_pct` — that is how much of the blueprint output
       reaches the propose boundary, this is what one firing then puts on the gate. */
   propose_count: number;
+  /** % of one firing's NEW clips that actually get a (paid) blueprint (1..100).
+      The same distinction as `propose_count` vs `propose_pct`, on the paid boundary:
+      `blueprint_pct` is WHEN analysis-engine fires, this is HOW MUCH it then processes.
+      The slice is the TOP slice — the pending queue is ranked by virality before it is
+      sliced — and the veto for clips too long to ever be "easy to remake" lives in
+      analysis-engine's own config as `max_duration_s`, because it must apply to a manual
+      Run from the Board too, not only to unattended firings. */
+  blueprint_top_pct: number;
 
   // ---- the funnel: one absolute batch size, then percentages of the row above ----
   // The whole configuration, and the only part of it a human sets. `steps` used to be the
