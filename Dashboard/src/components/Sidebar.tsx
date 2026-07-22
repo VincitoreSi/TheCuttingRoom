@@ -1,3 +1,6 @@
+// React 19 removed the global `JSX` namespace; it now ships under React's own types, so the
+// icon signature below has to import it rather than reach for an ambient global.
+import type { JSX } from "react";
 import { motion } from "framer-motion";
 import {
   IconActivity,

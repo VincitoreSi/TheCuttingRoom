@@ -65,7 +65,7 @@ graph LR
 | **AnalysisEngine** | Watches top clips frame-by-frame with Gemini and writes generation-ready blueprints (`schema_version 2`). The shared substrate every producer reads. | `/api/analysis`, `/api/corpus`, `/api/insights`, `/api/reference` |
 | **SimilarContent** | A producer (`kind: clone`) that recreates a winning clip 1:1 from its blueprint's `shots[]` and `regeneration_guide`. | `/api/corpus`, `/api/analysis`, `/api/audio`, `/api/studio` |
 | **AutoSearch** | The "front door" (`kind: discovery`). Searches Instagram for new creators, scores niche-fit, and posts candidates for human review. | `/api/discovery`, `/api/config`, `/api/corpus/{p}/factors`, `/api/insights` |
-| **Dashboard** | "The Cutting Room" — React 18 + TS + Vite + Tailwind v4 control board. Renders producer lanes, the human gate, sounds, blueprints, activity, and discovery. | all read routes, plus the human-gate `POST` routes |
+| **Dashboard** | "The Cutting Room" — React 19 + TS + Vite + Tailwind v4 control board. Renders producer lanes, the human gate, sounds, blueprints, activity, and discovery. | all read routes, plus the human-gate `POST` routes |
 | **`_producer-template/`** | Scaffold for spinning up new producers (`cp -r _producer-template <Dir>`). | registers via the same producer SPI |
 
 !!! tip "Settled decision, not a TODO"
