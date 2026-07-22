@@ -511,7 +511,7 @@ Stage jobs are launched generically and tracked as background subprocesses; the 
 | `GET /api/schedule` | Per-platform automatic-run settings, plus the derived `stages` and `next_run_at`. |
 | `PUT /api/schedule/{platform}` | `{enabled?, every_hours?, include_blueprints?}` — every field optional. |
 | `GET /api/cascade` | Per-platform cascading-heartbeat settings, with the boundary arithmetic already done — see [The cascade](#the-cascade). |
-| `PUT /api/cascade/{platform}` | `{enabled?, include_blueprints?, scrape_count?, analyze_pct?, media_pct?, blueprint_pct?, propose_pct?, propose_count?}` — every field optional. |
+| `PUT /api/cascade/{platform}` | `{enabled?, include_blueprints?, scrape_count?, analyze_pct?, media_pct?, blueprint_pct?, propose_pct?, propose_count?, blueprint_top_pct?}` — every field optional. |
 | `GET /api/events` | SSE stream — see below. |
 
 ### The cascade
