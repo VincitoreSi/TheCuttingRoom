@@ -3,9 +3,11 @@ import { motion } from "framer-motion";
 import { useShell } from "../App";
 import {
   useAgentConfig,
+  useAgents,
   useCandidates,
   usePendingCandidates,
   useReducedMotion,
+  useSaveAgentConfig,
   useSetCandidateStatus,
 } from "../lib/hooks";
 import { Badge, Button, Card, EmptyState, Eyebrow, SectionHead } from "../components/ui";
@@ -17,6 +19,7 @@ import { safeUrl } from "../lib/url";
 import { sectionMotion } from "../lib/motion";
 import { cx } from "../lib/cx";
 import type { Candidate } from "../lib/types";
+import type { ViewKey } from "../components/Sidebar";
 
 /* gate-status semantics (§9.6/§11.4), read off the shared statusTone helper:
    pending = neutral, approved = the signature sage, rejected = muted — the
@@ -45,7 +48,7 @@ function relevanceColor(score: number): string {
   return "var(--danger)";
 }
 
-export function DiscoveryView() {
+export function DiscoveryView({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
   const { platform } = useShell();
   const pendingQ = usePendingCandidates(platform);
   const approvedQ = useCandidates(platform, "approved");
@@ -70,7 +73,7 @@ export function DiscoveryView() {
         }
       />
 
-      <CadencePanel />
+      <CadencePanel onNavigate={onNavigate} />
 
       {/* the human gate is the point of this view, same pattern as Studio */}
       {pendingQ.isLoading ? (
@@ -131,9 +134,47 @@ export function DiscoveryView() {
    `GET /api/config/agent/auto-search` the schema-driven ProducersView form
    edits — and surfaces the kill-switch + weekly plan without duplicating the
    full form here. */
-function CadencePanel() {
+function CadencePanel({ onNavigate }: { onNavigate?: (v: ViewKey) => void }) {
+  void onNavigate;
+  const { openAgent } = useShell();
   const cfgQ = useAgentConfig("auto-search");
   const cfg = cfgQ.data?.config;
+  const save = useSaveAgentConfig("auto-search");
+  const agent = useAgents().data?.find((a) => a.name === "auto-search");
+
+  /* The key note is a CAPABILITY line, never a warning. Discovery runs keyword-only without
+     a key and the hub marks the stage unconditionally ready; a red "missing key" here would
+     re-introduce a bug this repo already shipped and rolled back once. See the secrets
+     comment in AutoSearch/cli.py. */
+  const hasGemini = (agent?.secrets ?? []).some((s) => s.env_var === "GEMINI_API_KEY" && s.present);
+  /* Term expansion is the SPEND SWITCH, separate from the discovery kill-switch: one Gemini
+     call per run to widen the search terms. ./init and ./cr keys --set now write the key to
+     AutoSearch/.env too, so it is sitting here ready and deliberately unused until opted in
+     (AutoSearch/cli.py:272 returns early while this is false). */
+  const expansionOn = (cfg as Record<string, unknown> | undefined)?.term_expansion_enabled === true;
+  const keyNote = !hasGemini
+    ? "Running keyword-only. Adding GEMINI_API_KEY (optional) lets it widen search terms; discovery works fully without one."
+    : expansionOn
+      ? "Term expansion is on — each run spends one Gemini call to widen its search terms."
+      : "GEMINI_API_KEY is set but unused here: term expansion is off, so discovery spends nothing. Opt in below to widen search terms.";
+
+  /* NOT Config. The full cadence form (weekly budget, active hours, and discovery_enabled
+     itself) is AgentConfigForm, which renders on the agent board — Config only carries keys
+     and model pickers. The old copy here sent people to "Config (The Bench)", where no such
+     control exists. */
+  /* PUT the FULL merged config with one flag flipped, mirroring AgentConfigForm's semantics —
+     a partial PUT would drop every other knob. */
+  function setFlag(key: string) {
+    save.mutate({
+      ...(cfgQ.data?.defaults ?? {}),
+      ...(cfgQ.data?.config ?? {}),
+      [key]: true,
+    });
+  }
+
+  function openCadenceForm() {
+    openAgent("auto-search");
+  }
 
   if (cfgQ.isLoading) return <div className="skeleton cadence-panel" style={{ height: 84 }} />;
 
@@ -142,9 +183,18 @@ function CadencePanel() {
       <Card className="p-4 cadence-panel">
         <Eyebrow>Cadence · auto-search</Eyebrow>
         <p className="text-[13px] text-[var(--ink-dim)] mt-1">
-          AutoSearch hasn't registered with the hub yet — start the agent once to read its cadence
-          plan here.
+          AutoSearch hasn't run yet, so its cadence plan is unknown. It publishes one the first time
+          it starts:
         </p>
+        <pre className="cadence-panel__cmd">./cr agent auto-search discover --dry-run</pre>
+        <p className="text-[13px] text-[var(--ink-dim)]">
+          On the native lane that is{" "}
+          <span className="font-mono">
+            cd AutoSearch &amp;&amp; uv run cli.py discover --dry-run
+          </span>
+          .
+        </p>
+        <p className="cadence-panel__keynote">{keyNote}</p>
       </Card>
     );
   }
@@ -179,8 +229,41 @@ function CadencePanel() {
       <p className="cadence-panel__posture">
         {enabled
           ? `Today's posture: scattered across ~${activeDays} of 7 days, thin-trickled through heartbeat ticks in the active window — a weekly budget, never a burst.`
-          : "Today's posture: idle. The agent and the hub's heartbeat scheduler both fail closed while the kill-switch is off — turn discovery on in Config (The Bench) to start scouting."}
+          : "Today's posture: idle. The agent and the hub's heartbeat scheduler both fail closed while the kill-switch is off, so nothing is scouted and nothing is spent."}
       </p>
+
+      <p className="cadence-panel__keynote">{keyNote}</p>
+
+      {/* Both switches were previously named in prose only ("turn discovery on in Config"),
+          with nothing to click — and Config was the wrong place besides. Each is one write to
+          the same agent config AgentConfigForm edits, so offer them here and keep the full
+          budget/window form one click away. */}
+      <div className="cadence-panel__actions">
+        {!enabled && (
+          <Button
+            variant="primary"
+            size="sm"
+            disabled={save.isPending}
+            onClick={() => setFlag("discovery_enabled")}
+          >
+            {save.isPending ? "Saving…" : "Turn discovery on"}
+          </Button>
+        )}
+        {hasGemini && !expansionOn && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={save.isPending}
+            title="Spends one Gemini call per run to widen the search terms"
+            onClick={() => setFlag("term_expansion_enabled")}
+          >
+            Use Gemini to widen terms
+          </Button>
+        )}
+        <Button variant="ghost" size="sm" onClick={openCadenceForm}>
+          Budget &amp; cadence
+        </Button>
+      </div>
     </Card>
   );
 }

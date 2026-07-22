@@ -265,6 +265,7 @@ export function PipelineBoard({
                     label={node.addTo.label}
                     variant="outline"
                     className="board__run mt-auto"
+                    trailingIcon={false}
                   />
                 ) : clickable ? (
                   <span className="board__link-hint eyebrow mt-auto">
@@ -393,7 +394,11 @@ function StageAction({
           disabled={pending}
           title={`Run ${fix} — the stage ${label} is waiting on`}
         >
-          <IconPlay size={13} /> Run {fix}
+          {/* No play icon here, unlike the other two Run buttons. This label carries a stage
+              name ("Run analyze"), and icon + gap + that label overflows the stage card's
+              full-width button — measured at 87px of content in an 84px button. The icon is
+              also the least useful part of it: the word "Run" already says what it does. */}
+          Run {fix}
         </Button>
       ) : (
         <Button

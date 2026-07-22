@@ -264,6 +264,20 @@ export interface JSONSchema {
   required?: string[];
 }
 
+/* Every agent this checkout knows about, registered or not (GET /api/agents).
+
+   Distinct from Producer, which is "who has registered". Registration is lazy — an agent
+   registers when its CLI first runs — so on a clean install the producer roster is empty and
+   the UI could say nothing about the key that gates the Blueprint stage. This type always
+   carries the built-in trio, with `registered` telling you whether the rest of the manifest
+   (config_schema, workflow_stages) is actually known. */
+export interface AgentRosterEntry extends Partial<Producer> {
+  name: string;
+  registered: boolean;
+  dir?: string | null;
+  secrets?: SecretStatus[];
+}
+
 export interface Producer {
   name: string;
   kind: string | null;

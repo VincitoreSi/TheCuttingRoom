@@ -1,11 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useAgentConfig, useProducers, useSaveAgentConfig } from "../../lib/hooks";
+import { useAgentConfig, useAgents, useSaveAgentConfig } from "../../lib/hooks";
 import { Badge, Card, EmptyState, Eyebrow, Input, SectionHead, Select } from "../ui";
 import { IconCheck, IconProducers } from "../icons";
 import { cx } from "../../lib/cx";
 import { ConfigField } from "./ConfigField";
 import { humanizeAgent } from "../../lib/agents";
-import type { JSONSchemaProp, Producer, SecretStatus } from "../../lib/types";
+import type { AgentRosterEntry, JSONSchemaProp, SecretStatus } from "../../lib/types";
 
 /* -------- Keys & models (unified agent config) --------
    One place for (a) each agent's API-key STATUS and (b) each agent's model
@@ -19,7 +19,10 @@ import type { JSONSchemaProp, Producer, SecretStatus } from "../../lib/types";
 const MODEL_KEYS = ["model", "judge_model", "image_provider"] as const;
 
 export function KeysAndModels() {
-  const producersQ = useProducers();
+  /* The full roster, not just registered producers. Registration is lazy — an agent
+     registers when its CLI first runs — so on a clean install this panel used to be empty
+     and said nothing about the key that gates the Blueprint stage. */
+  const producersQ = useAgents();
   const producers = producersQ.data ?? [];
 
   const missingCount = producers.filter((p) =>
@@ -61,12 +64,12 @@ export function KeysAndModels() {
         <EmptyState
           icon={<IconProducers size={28} />}
           title="No agents registered"
-          hint="Agents self-register with the hub on startup. Start one (e.g. analysis-engine) and its keys & model controls appear here automatically."
+          hint="The hub could not resolve any agent directories. A full checkout ships AnalysisEngine, AutoSearch and SimilarContent alongside ReelScraper."
         />
       ) : (
         <div className="flex flex-col gap-3">
           {producers.map((p) => (
-            <AgentKeysModels key={p.name} producer={p} />
+            <AgentKeysModels key={p.name} agent={p} />
           ))}
         </div>
       )}
@@ -74,8 +77,10 @@ export function KeysAndModels() {
   );
 }
 
-function AgentKeysModels({ producer: p }: { producer: Producer }) {
-  const cfgQ = useAgentConfig(p.name);
+function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
+  /* An unregistered agent has no stored config to fetch — asking would 404. Its KEYS are
+     still knowable (the hub reads the agent's .env directly), which is the whole point. */
+  const cfgQ = useAgentConfig(p.registered ? p.name : null);
   const save = useSaveAgentConfig(p.name);
   // Full merged config (defaults <- stored), matching AgentConfigForm's PUT
   // semantics: we persist the whole map, only ever mutating a model field.
@@ -104,6 +109,7 @@ function AgentKeysModels({ producer: p }: { producer: Producer }) {
       <div className="km-agent__head">
         <span className="producer__name font-display">{humanizeAgent(p.name)}</span>
         {p.kind && <Badge tone="brass">{p.kind}</Badge>}
+        {!p.registered && <Badge tone="neutral">not started yet</Badge>}
         {saved && (
           <span className="km-saved">
             <IconCheck size={12} /> saved
@@ -129,7 +135,12 @@ function AgentKeysModels({ producer: p }: { producer: Producer }) {
         {/* -------- Model / provider selectors (editable) -------- */}
         <div className="km-col">
           <Eyebrow className="mb-2">Model</Eyebrow>
-          {cfgQ.isLoading ? (
+          {!p.registered ? (
+            <span className="eyebrow">
+              Known once this agent runs — it publishes its model options to the hub the first time
+              it starts.
+            </span>
+          ) : cfgQ.isLoading ? (
             <div className="skeleton" style={{ height: 48 }} />
           ) : modelKeys.length === 0 ? (
             <span className="eyebrow">Uses its built-in default model.</span>

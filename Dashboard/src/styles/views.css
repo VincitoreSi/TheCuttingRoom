@@ -1378,3 +1378,29 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+/* Cadence panel: the kill-switch state has to be actionable, not just described. */
+.cadence-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.cadence-panel__keynote {
+  margin-top: 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-dim);
+}
+.cadence-panel__cmd {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}

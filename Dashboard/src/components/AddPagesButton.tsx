@@ -20,11 +20,17 @@ export function AddPagesButton({
   label = "Add Instagram handle",
   variant = "primary",
   className,
+  trailingIcon = true,
 }: {
   onNavigate?: (v: ViewKey) => void;
   label?: string;
   variant?: "primary" | "outline";
   className?: string;
+  /* The arrow costs 12px plus an 8px gap. In a roomy CTA that is free; in the pipeline
+     board's full-width stage button it is the difference between a centred label and one
+     pressed flat against the left border (measured: 82px of content in an 84px button, so
+     the 12px padding is simply gone). Callers in narrow slots turn it off. */
+  trailingIcon?: boolean;
 }) {
   if (!onNavigate) return null;
   return (
@@ -39,7 +45,13 @@ export function AddPagesButton({
       }}
       title="Open the watchlist in Config and add an Instagram handle"
     >
-      {label} <IconArrowRight size={12} />
+      {trailingIcon ? (
+        <>
+          {label} <IconArrowRight size={12} />
+        </>
+      ) : (
+        label
+      )}
     </Button>
   );
 }
