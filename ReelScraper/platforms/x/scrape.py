@@ -392,7 +392,7 @@ def main():
 
     if args.limit is None:
         cfg = _load_json(HERE / "niche_config.json")
-        args.limit = int(cfg.get("posts_per_creator") or 200)
+        args.limit = int(cfg.get("posts_per_creator") or 100)
 
     creators = []
     for h in args.handles:

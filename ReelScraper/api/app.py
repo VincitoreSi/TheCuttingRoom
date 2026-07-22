@@ -72,6 +72,12 @@ class CascadeIn(BaseModel):
     blueprint_pct: Optional[int] = None           # the analysis-engine boundary — PAID
     propose_pct: Optional[int] = None
     propose_count: Optional[int] = None
+    # HOW MUCH the paid boundary processes when it fires — not when it fires. `blueprint_pct`
+    # above is the trigger cadence and feeds `_cascade_steps`; this is a quota, and the two
+    # are deliberately separate fields. Overloading one number with both meanings is the same
+    # trap as `media_pct: 60` sitting next to `download_media.py --top 60`, which are
+    # unrelated and were read as one setting.
+    blueprint_top_pct: Optional[int] = None
 
 
 class Proposal(BaseModel):
@@ -2906,7 +2912,13 @@ CASCADE_DEFAULTS = {
     "media_pct": 60,
     "blueprint_pct": 20,          # the analysis-engine boundary — PAID
     "propose_pct": 20,
-    "propose_count": 3,
+    "propose_count": 5,
+    # The share of a firing's NEW clips that actually get a (paid) blueprint. The queue it
+    # rations is already ranked by virality — GET /api/analysis/{p}/pending sorts by
+    # -virality_score before it slices — so "20%" means the top fifth, not an arbitrary
+    # fifth. Its own field rather than a reuse of `blueprint_pct`: that one is the trigger
+    # cadence and `_cascade_steps` derives the funnel invariant from it.
+    "blueprint_top_pct": 20,
     # The high-water marks: how much input each boundary has already consumed. Machine-owned
     # — accepted-but-ignored on PUT.
     "marks": {s: 0 for s in CASCADE_STAGES},
@@ -2919,7 +2931,8 @@ assert set(CASCADE_PCTS) == set(CASCADE_STAGES)
 # What is persisted, in order. Everything else `_read_cascade` returns is derived and must
 # not be written back — `problem` especially (a symptom, not a setting), and now `steps` too.
 CASCADE_PERSISTED = ("enabled", "include_blueprints", "scrape_count", "analyze_pct",
-                     "media_pct", "blueprint_pct", "propose_pct", "propose_count", "marks")
+                     "media_pct", "blueprint_pct", "propose_pct", "propose_count",
+                     "blueprint_top_pct", "marks")
 PROPOSE_COUNT_MAX = 25        # mirrors the `top_n` schema the producer registers
 SCRAPE_COUNT_MAX = 5_000      # one batch; above this the funnel is describing someone else's box
 CASCADE_STEP_MAX = 1_000_000  # ceiling on a DERIVED step — see _cascade_steps
@@ -3036,6 +3049,10 @@ def _read_cascade():
                       CASCADE_DEFAULTS["include_blueprints"]),
                   "scrape_count": _cascade_int(row, "scrape_count", 1, SCRAPE_COUNT_MAX),
                   **{f: _cascade_int(row, f, 1, 100) for f in CASCADE_PCTS.values()},
+                  # Clamped like a pct but NOT in CASCADE_PCTS: that map keys the trigger
+                  # cadences `_cascade_steps` walks, and adding a quota to it would put this
+                  # number into the funnel derivation.
+                  "blueprint_top_pct": _cascade_int(row, "blueprint_top_pct", 1, 100),
                   "marks": _cascade_ints(row.get("marks"), CASCADE_DEFAULTS["marks"], 0)}
         # DERIVED, never read from the file. An older install's stored `steps` is simply
         # ignored — it was an input to a model that no longer exists, and a per-install file
@@ -3148,11 +3165,27 @@ def _cascade_plan(row, counts):
 
 
 def _cascade_extra_args(stage, row, available):
-    """Per-stage arguments. Only `propose` takes one: never publish more recipes than the
-    new blueprints that triggered this fire. It can only bite on a hand-edited file, and it
-    is kept for exactly that case."""
+    """Per-stage arguments, both sized off `available` — the NEW input that triggered this
+    firing, never the whole corpus. A quota measured against the corpus would re-ration work
+    already done and grow without bound as the corpus does.
+
+    `propose`: never publish more recipes than the new blueprints that triggered this fire.
+    It can only bite on a hand-edited file, and it is kept for exactly that case.
+
+    `analysis-engine`: the PAID boundary, and the only place the cascade rations spend.
+    `blueprint_top_pct` of the new clips get a blueprint; the rest wait for a later firing.
+    The slice is meaningful because GET /api/analysis/{p}/pending already ranks by
+    -virality_score before applying `limit`, so this takes the TOP fifth by default rather
+    than an arbitrary one. Rounded UP and floored at 1: a boundary that fired is a boundary
+    that found new work, and a quota that rounds it to "analyze nothing" would leave the
+    mark advancing over clips nothing ever looked at — a silent skip.
+
+    Nothing is passed for `analyze` or `media`: both are free and process what they find."""
     if stage == "propose":
         return ["--count", str(max(1, min(int(row["propose_count"]), int(available))))]
+    if stage == "analysis-engine":
+        n = -(-int(available) * int(row["blueprint_top_pct"]) // 100)   # ceil
+        return ["--limit", str(max(1, min(n, int(available))))]
     return None
 
 
@@ -3356,8 +3389,11 @@ def put_cascade(platform, body: CascadeIn):
     with _CASCADE_LOCK:
         cfg = _read_cascade()
         row = cfg[platform]
-        for field, hi in (("scrape_count", SCRAPE_COUNT_MAX), *((f, 100) for f in
-                                                                CASCADE_PCTS.values())):
+        # blueprint_top_pct rides this loop for the clamp, but it is NOT in CASCADE_PCTS, so
+        # `_cascade_steps` below never sees it — a quota must not move the trigger cadence.
+        for field, hi in (("scrape_count", SCRAPE_COUNT_MAX),
+                          ("blueprint_top_pct", 100),
+                          *((f, 100) for f in CASCADE_PCTS.values())):
             v = getattr(body, field)
             if v is not None:
                 row[field] = min(hi, max(1, int(v)))

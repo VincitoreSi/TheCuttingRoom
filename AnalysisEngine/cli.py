@@ -52,7 +52,21 @@ CONFIG_SCHEMA = {
         "max_repair_passes": {"type": "integer", "default": 2},
         "temperature": {"type": "number", "default": 0.4},
         "max_output_tokens": {"type": "integer", "default": 64000},
-        "default_limit": {"type": "integer", "default": 15},
+        "default_limit": {"type": "integer", "default": 10},
+        # The duration veto, and the closest thing to an "easy to remake" signal that exists
+        # BEFORE a blueprint does. Ease is scored downstream in SimilarContent, but 65 of its
+        # 100 points come from shot count and static-camera fraction — both read out of the
+        # schema-2 blueprint, i.e. out of the very thing this stage is deciding whether to pay
+        # for. Duration is the one ease input available beforehand, and the ease heuristic
+        # already treats it as a veto rather than a term: at or over EASE_LONG_S (30s) a clip
+        # "is never 'easy' at any setting". So refusing to blueprint those costs nothing that
+        # could ever have cleared the gate. 0 disables the veto.
+        "max_duration_s": {"type": "number", "default": 30.0,
+                           "description": "Skip clips longer than this many seconds (0 = no "
+                                          "limit). Mirrors SimilarContent's EASE_LONG_S: a "
+                                          "clip at or over it can never score as easy to "
+                                          "remake, so a blueprint for one is spend that the "
+                                          "ease gate will never use."},
     },
 }
 DEFAULTS = {k: v["default"] for k, v in CONFIG_SCHEMA["properties"].items()}
@@ -296,7 +310,12 @@ def cmd_run(args) -> int:
 
     filters = {
         "min_score": args.min_score, "tier": args.tier,
-        "min_duration": args.min_duration, "max_duration": args.max_duration,
+        "min_duration": args.min_duration,
+        # --max-duration wins; otherwise the configured veto, and 0/None means no veto at
+        # all. Applied here rather than only in the cascade's argv so it holds for a manual
+        # Run from the Board too — a veto that only bites unattended is not a veto.
+        "max_duration": (args.max_duration if args.max_duration is not None
+                         else (cfg.get("max_duration_s", DEFAULTS["max_duration_s"]) or None)),
         "content_type": args.content_type,
         "limit": args.limit if args.limit is not None else cfg["default_limit"],
         "stale": args.stale or None, "reanalyze": args.reanalyze,

@@ -36,7 +36,8 @@ export const CASCADE_LIMITS = {
   media_pct: { min: 1, max: 100, fallback: 60 },
   blueprint_pct: { min: 1, max: 100, fallback: 20 },
   propose_pct: { min: 1, max: 100, fallback: 20 },
-  propose_count: { min: 1, max: 25, fallback: 3 },
+  propose_count: { min: 1, max: 25, fallback: 5 },
+  blueprint_top_pct: { min: 1, max: 100, fallback: 20 },
 } as const;
 
 export type CascadeField = keyof typeof CASCADE_LIMITS;

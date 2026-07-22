@@ -8,7 +8,7 @@ niche: Travel
 platforms:
 
   instagram:
-    reels_per_creator: 250
+    reels_per_creator: 100
     discovery:
       keywords:
         - travel
@@ -44,7 +44,7 @@ platforms:
       - "@example.wander.lens"
 
   x:
-    posts_per_creator: 200
+    posts_per_creator: 100
     # Even on X, travel threads compound slowly rather than spiking — velocity stays low.
     weights:
       reach_multiplier: 0.30
@@ -62,7 +62,7 @@ platforms:
       - "@ex_roadtrip_hd"
 
   youtube:
-    shorts_per_creator: 200
+    shorts_per_creator: 100
     # Shorts + evergreen travel = the slowest burn of all; velocity is the lightest signal.
     weights:
       reach_multiplier: 0.35

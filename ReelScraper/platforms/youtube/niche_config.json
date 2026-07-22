@@ -1,6 +1,6 @@
 {
   "niche": "Fashion",
-  "shorts_per_creator": 200,
+  "shorts_per_creator": 100,
   "_note": "YouTube Shorts have no share/save signal; reach vs subscribers + outlier vs channel median carry the most. Slow-burn views mean velocity is down-weighted.",
   "virality": {
     "weights": { "reach_multiplier": 0.40, "outlier_score": 0.30, "engagement_rate": 0.20, "velocity": 0.10 },

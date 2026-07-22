@@ -527,7 +527,7 @@ def test_a_refused_configuration_is_not_persisted(hub):
 
     row = hub.get("/api/cascade").json()[PLATFORM]
     assert row["scrape_count"] == 250            # the default, untouched
-    assert row["propose_count"] == 3
+    assert row["propose_count"] == 5
 
 
 def test_a_hand_edited_config_that_widens_the_funnel_disables_that_platform_and_says_why(
@@ -660,7 +660,7 @@ def test_the_cascade_is_off_on_a_fresh_install(hub):
             row["blueprint_pct"], row["propose_pct"]) == (100, 60, 20, 20)
     assert row["steps"] == {"analyze": 250, "media": 417,
                             "analysis-engine": 2_085, "propose": 10_425}
-    assert row["propose_count"] == 3
+    assert row["propose_count"] == 5
 
 
 def test_enabling_the_cascade_stamps_the_marks_to_the_current_counts(hub, launched):
@@ -823,6 +823,34 @@ def test_propose_never_asks_for_more_recipes_than_the_blueprints_that_triggered_
     assert hub.mod._cascade_extra_args("analyze", row, 99) is None
 
 
+def test_the_paid_boundary_is_rationed_to_its_configured_share_of_the_new_clips(hub):
+    """`--limit` is `blueprint_top_pct` of what TRIGGERED the firing, never of the corpus.
+    Sized against the corpus it would re-ration work already blueprinted and grow without
+    bound as the corpus does — on the one boundary that spends money per clip.
+
+    The slice is meaningful because GET /api/analysis/{p}/pending sorts by -virality_score
+    before it applies `limit`, so this is the TOP fifth by default, not an arbitrary fifth.
+    The duration veto is deliberately NOT here: it lives in analysis-engine's own config as
+    `max_duration_s` so a manual Run from the Board obeys it too."""
+    row = {"blueprint_top_pct": 20}
+
+    assert hub.mod._cascade_extra_args("analysis-engine", row, 60) == ["--limit", "12"]
+
+    # Rounds UP and floors at 1. A boundary that fired is one that found new work, and a
+    # quota that floored to 0 would hand out `--limit 0`, analyze nothing, and still let the
+    # mark advance past those clips — a silent skip, which is what a watermark exists to
+    # prevent.
+    assert hub.mod._cascade_extra_args("analysis-engine", row, 4) == ["--limit", "1"]
+    assert hub.mod._cascade_extra_args("analysis-engine", row, 1) == ["--limit", "1"]
+
+    # Never more than what triggered the firing, even at 100%.
+    assert hub.mod._cascade_extra_args(
+        "analysis-engine", {"blueprint_top_pct": 100}, 7) == ["--limit", "7"]
+
+    # media is free and processes what it finds; it is handed nothing.
+    assert hub.mod._cascade_extra_args("media", row, 99) is None
+
+
 def test_propose_asks_for_its_configured_count_when_there_is_room(
         hub, launched, proposer):
     _cfg(hub, marks={"media": 10})
@@ -951,7 +979,11 @@ def test_the_card_and_the_hub_agree_on_every_bound_and_default(hub):
     want = {"scrape_count": (1, hub.mod.SCRAPE_COUNT_MAX,
                              hub.mod.CASCADE_DEFAULTS["scrape_count"]),
             "propose_count": (1, hub.mod.PROPOSE_COUNT_MAX,
-                              hub.mod.CASCADE_DEFAULTS["propose_count"])}
+                              hub.mod.CASCADE_DEFAULTS["propose_count"]),
+            # A quota, not a cadence — so it is absent from CASCADE_PCTS below and has to be
+            # named here, exactly like the two counts above.
+            "blueprint_top_pct": (1, 100,
+                                  hub.mod.CASCADE_DEFAULTS["blueprint_top_pct"])}
     for field in hub.mod.CASCADE_PCTS.values():
         want[field] = (1, 100, hub.mod.CASCADE_DEFAULTS[field])
 
