@@ -94,7 +94,7 @@ the same port. `--rm` is deliberate in that line, because **nothing you do in it
 container.** It starts as a clean, empty studio: no watchlist, no corpus, no keys. It is the
 "show me what this is" path, not the "use it" path.
 
-Tags: `latest` and `1.2` / `1.2.0` come from a release; `edge` and `sha-<short>` come from a
+Tags: `latest` and `1.3` / `1.3.0` come from a release; `edge` and `sha-<short>` come from a
 manual run against `main`. Docker picks your architecture automatically.
 
 **To actually use it, clone the repo and run `./cr up` instead.** Not a formality — the
