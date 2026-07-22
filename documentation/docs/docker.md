@@ -185,6 +185,7 @@ absolute checkout path, pinned into `ReelScraper/.env` as `COMPOSE_PROJECT_NAME`
 | `./cr health [args…]` | Runs `./cr verify-loopback` on the host first and hands the verdict in, then runs `./health` in the **dev** image. Arguments are forwarded **verbatim** and nothing is added — ask for `--strict --live` yourself. |
 | `./cr verify-loopback` | Enumerates the host's non-loopback IPv4 addresses and asserts each is refused while `127.0.0.1:$HUB_PORT` succeeds. Host-side only, and it needs `curl` or `wget`. |
 | `./cr keys` | `scripts/check-keys.py` **inside** the container, so it proves the container's egress path to the model APIs, which is the one that matters. Read-only; spends nothing. |
+| `./cr keys --set` | Prompts for your Gemini key (hidden), writes it to all three agent `.env` files and verifies it from inside the container. This lane's equivalent of `./init`'s prompt — see [Secrets](#secrets). |
 | `./cr shell` | A `/bin/sh` in the running hub container. |
 | `./cr docsite` | Docs live-reload on `http://127.0.0.1:$DOCS_PORT` (default 8000). Stopped by `./cr down`. |
 | `./cr demo` | Loads the demo dataset in the dev image, so `unzip` and `zip` stay off the host requirement list. Starts no hub — reload the one `./cr up` is already running. |
