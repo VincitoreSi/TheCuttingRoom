@@ -30,7 +30,7 @@ niche: Fashion                       # display name, written into every niche_co
 
 platforms:
   instagram:
-    reels_per_creator: 250           # per-creator scrape limit
+    reels_per_creator: 100           # per-creator scrape limit
                                      # (x: posts_per_creator, youtube: shorts_per_creator)
     discovery:                       # instagram-only keyword/seed discovery (OFF by default)
       keywords: [fashion, ootd, ...] # relevance keywords for auto-discovery

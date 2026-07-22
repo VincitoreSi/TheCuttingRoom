@@ -169,6 +169,7 @@ Producers write generation output here as markdown proposals; a human approves o
 | `GET /api/studio/{platform}/{file}` | One studio item by filename — so a producer rendering a single approved item doesn't have to fetch and filter the whole list. |
 | `POST /api/studio/{platform}` | Save a proposal (upsert by filename). |
 | `POST /api/studio/{platform}/{file}/status` | Record a human-gate decision. |
+| `DELETE /api/studio/{platform}/{file}` | Remove a **rejected** item. 409 for any other status, and 409 when the item has rendered media (delete that first via `DELETE /api/renders/{platform}/{render_id}`). The decision history in `gate.jsonl` is kept and gains a `deleted` record. |
 | `POST /api/studio/{platform}/{file}/render` | Render ONE approved item. Launches the producer that **wrote** the item, resolved from the registry — the hub names no agent. Body: `{"force": bool}` (optional). |
 
 ```json title="POST /api/studio/{platform} — Proposal"
@@ -516,7 +517,8 @@ Per-platform, stored in `config/pipeline_cascade.json` (gitignored — per-insta
 | `media_pct` | int | `60` | How much of the analyzed output is worth downloading. 1..100. |
 | `blueprint_pct` | int | `20` | How much of the downloaded media is worth a **paid** blueprint. 1..100. |
 | `propose_pct` | int | `20` | How many of those blueprints are worth proposing against. 1..100. |
-| `propose_count` | int | `3` | How many proposals `propose` publishes per fire, clamped to the number of new blueprints available. 1..25. |
+| `propose_count` | int | `5` | How many proposals `propose` publishes per fire, clamped to the number of new blueprints available. 1..25. |
+| `blueprint_top_pct` | int | `20` | What share of one firing's **new** clips actually get a (paid) blueprint, passed to `analysis-engine` as `--limit`. Not the same field as `blueprint_pct`: that decides *when* the boundary fires, this decides *how much* it then processes. The slice is the top slice — `GET /api/analysis/{p}/pending` ranks by virality before applying the limit. 1..100. |
 | `steps` | object | derived | **Read-only.** How much new input each boundary waits for, derived as `step[stage] = ceil(step[previous] * 100 / pct[stage])`. A `steps` key in a PUT body is ignored. |
 | `marks` | object | per-input-count | **Read-only.** Watermarks last consumed at: `analyze` counts raw scraped reels, `media` counts scored corpus rows, `analysis-engine` counts persisted mp4s, `propose` counts blueprints. Reset only by disabling/enabling. |
 
@@ -541,7 +543,8 @@ Behaviour:
 ```json
 {"instagram": {"enabled": false, "include_blueprints": false,
                "scrape_count": 250, "analyze_pct": 100, "media_pct": 60,
-               "blueprint_pct": 20, "propose_pct": 20, "propose_count": 3,
+               "blueprint_pct": 20, "propose_pct": 20, "propose_count": 5,
+               "blueprint_top_pct": 20,
                "marks": {"analyze": 0, "media": 0, "analysis-engine": 0, "propose": 0},
                "steps": {"analyze": 250, "media": 417, "analysis-engine": 2085, "propose": 10425},
                "counts": {"analyze": 870, "media": 810, "analysis-engine": 405, "propose": 120},

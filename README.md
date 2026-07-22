@@ -79,6 +79,19 @@ One image, one container, and `./cr` as the only host-side command:
 ./cr help        # works on a machine with no Docker installed
 ```
 
+**Prebuilt images.** Every `v*` tag publishes a multi-arch image (`linux/amd64` +
+`linux/arm64`) to the GitHub Container Registry, so you can skip the build:
+
+```bash
+docker pull ghcr.io/vincitoresi/thecuttingroom:latest   # or :edge for the tip of main
+```
+
+`./cr build` stays the supported path for running it — the container needs the repo
+bind-mounted at `/app` for its data, and `./cr` is what wires that up. GHCR rather than Docker
+Hub because Docker Hub rate-limits anonymous pulls to 100 per six hours **per IP**, which is a
+limit on the people trying to run this, not on the maintainer; GHCR has no pull limit on public
+images.
+
 **Keys.** `./init` is the native lane's key prompt and it needs Python on the host, so the
 container lane has its own: `./cr keys --set` asks once, writes `GEMINI_API_KEY` to
 `AnalysisEngine/.env`, `SimilarContent/.env` and `AutoSearch/.env`, and verifies it from
@@ -249,6 +262,13 @@ how much of each stage's input is worth passing to the next — 100% analyzed, 6
 downloading, 20% of those worth a blueprint, 20% of those worth proposing against. Because
 no percentage can exceed 100, **a later stage can never be configured to fire more often
 than the one feeding it**; the funnel only ever narrows.
+
+Those percentages set *when* each boundary fires. Two separate knobs decide *how much* the
+paid boundary then does, and both default to rationing it: `blueprint_top_pct` (20%) is the
+share of a firing's new clips that actually get a blueprint — the top share, since the queue
+is ranked by virality before it is sliced — and `max_duration_s` (30s) refuses clips too long
+to ever be worth remaking. Scraping is capped per creator too: `reels_per_creator` is 100,
+and a creator with fewer than that simply yields all of them.
 
 Two things it will never do. It never runs `render`, which is the only step that spends
 money per frame — that stays behind a human click, by construction rather than by config.
