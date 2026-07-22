@@ -1,7 +1,7 @@
 {
   "name": "cutting-room",
   "private": true,
-  "version": "1.3.0",
+  "version": "1.3.1",
   "type": "module",
   "description": "The Cutting Room \u2014 control board for the local content-virality pipeline",
   "license": "MIT",

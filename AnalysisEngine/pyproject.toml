@@ -1,6 +1,6 @@
 [project]
 name = "analysis-engine"
-version = "1.3.0"
+version = "1.3.1"
 description = "AnalysisEngine — Gemini-powered short-form-video analyzer that produces the canonical schema_version 2 blueprint and writes it to the pipeline hub over HTTP."
 requires-python = ">=3.10"
 license = { text = "MIT" }

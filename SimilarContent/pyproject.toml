@@ -1,6 +1,6 @@
 [project]
 name = "similar-content"
-version = "1.3.0"
+version = "1.3.1"
 description = "SimilarContent — the pipeline's cloning producer: takes a top-performing exemplar (or its schema_version 2 blueprint), reproduces its beats, and renders new short-form frames via a configurable image backend, registering with the hub over HTTP."
 requires-python = ">=3.10"
 license = { text = "MIT" }
