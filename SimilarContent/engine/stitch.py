@@ -32,6 +32,7 @@ import logging
 import os
 import shutil
 import subprocess
+import zlib
 from pathlib import Path
 
 log = logging.getLogger("sc.stitch")
@@ -99,6 +100,107 @@ def probe_image_size(path: Path) -> tuple[int, int] | None:
         return int(w), int(h)
     except (StitchError, ValueError):
         return None
+
+
+# ------------------------------------------------------------------------------------------
+# Frame sanity — is this still a picture, or a picture with a bar painted through it?
+#
+# A provider occasionally returns a frame with a hard black band down it. On its own that is
+# one bad frame; through `render_frames`' anchoring it becomes the WHOLE reel, because frame 0
+# is attached as the reference for every later frame and the model faithfully reproduces the
+# band as part of the scene. Observed: six frames of one clone carrying an identical 143px
+# band at columns 585..727, while thirteen frames of two other clones were clean.
+#
+# The test is deliberately narrow. A dark PHOTOGRAPH is legitimate and common; a full-height
+# run of near-black columns inside an otherwise bright frame is not a photograph. So the check
+# only fires when the frame is mostly bright (median column above MIN_SCENE_LUMA) AND a
+# contiguous run of columns is essentially black — the two together are what "a bar" means and
+# what a night scene, a dark doorway or a shadowed wall never satisfy at once.
+DARK_LUMA = 16            # a column this dark is not shadow
+MIN_SCENE_LUMA = 40       # below this the frame is legitimately dark; do not judge it
+MAX_DARK_RUN = 0.06       # contiguous share of the width that reads as a bar
+_PROFILE_COLS = 96        # sampling resolution; a 6% run is ~6 columns
+
+
+def _gray_png_row(data: bytes, cols: int) -> list[int] | None:
+    """The single scanline of an 8-bit greyscale PNG, unfiltered.
+
+    A full PNG decoder would be the wrong tool: this package is `dependencies = []` and the
+    image is one row, so it is one zlib stream holding one filter byte plus `cols` samples.
+    Row 0 has no row above it, so Up/Average/Paeth all collapse to their left-only forms.
+    """
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    idat, pos, depth, ctype = b"", 8, None, None
+    while pos + 8 <= len(data):
+        ln = int.from_bytes(data[pos:pos + 4], "big")
+        kind = data[pos + 4:pos + 8]
+        body = data[pos + 8:pos + 8 + ln]
+        if kind == b"IHDR":
+            depth, ctype = body[8], body[9]
+        elif kind == b"IDAT":
+            idat += body
+        elif kind == b"IEND":
+            break
+        pos += 12 + ln                      # length + type + data + crc
+    if depth != 8 or ctype != 0 or not idat:
+        return None                          # not the 8-bit grey we asked ffmpeg for
+    try:
+        raw = zlib.decompress(idat)
+    except zlib.error:
+        return None
+    if len(raw) < cols + 1:
+        return None
+    ftype, row = raw[0], list(raw[1:cols + 1])
+    if ftype in (1, 3, 4):                   # Sub / Average / Paeth, all left-only on row 0
+        for i in range(1, cols):
+            left = row[i - 1]
+            row[i] = (row[i] + (left // 2 if ftype == 3 else left)) & 0xFF
+    elif ftype not in (0, 2):                # None / Up(=None on row 0)
+        return None
+    return row
+
+
+def column_luma(path: Path, cols: int = _PROFILE_COLS) -> list[int] | None:
+    """Down-sample a still to a `cols`x1 greyscale strip and return its column brightnesses.
+
+    Everything here is present in the --disable-everything runtime build: the png/mjpeg
+    decoders, the scale and format filters, the png encoder and the image2 muxer. Notably
+    ABSENT are the rawvideo muxer and anything netpbm, which is why the strip comes back as a
+    PNG and is parsed above rather than read as bytes.
+    """
+    tmp = path.with_name(f".{path.stem}-profile.png")
+    try:
+        _run([FFMPEG, "-v", "error", "-y", "-i", str(path),
+              "-vf", f"scale={cols}:1:flags=area,format=gray", "-frames:v", "1",
+              "-c:v", "png", "-f", "image2", str(tmp)])
+        return _gray_png_row(tmp.read_bytes(), cols)
+    except (StitchError, OSError):
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def frame_defect(path: Path) -> str | None:
+    """A one-line reason this frame should not be used, or None.
+
+    Returns None when the frame cannot be read: an unreadable still is stitch's problem to
+    report later, and refusing to render on a probe failure would turn a missing ffmpeg into
+    a spend-nothing-succeed-never loop.
+    """
+    cols = column_luma(path)
+    if not cols:
+        return None
+    if sorted(cols)[len(cols) // 2] < MIN_SCENE_LUMA:
+        return None                          # a dark frame, not a barred one
+    longest = run = 0
+    for v in cols:
+        run = run + 1 if v < DARK_LUMA else 0
+        longest = max(longest, run)
+    share = longest / len(cols)
+    if share >= MAX_DARK_RUN:
+        return f"a black band across {share * 100:.0f}% of the width"
+    return None
 
 
 def _scale_chain(width: int, height: int, fit: str = "auto",

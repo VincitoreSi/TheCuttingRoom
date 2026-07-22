@@ -15,7 +15,8 @@ import pytest
 
 from engine.stitch import (
     ASPECT_PRESETS, REELS_ASPECT, StitchError, _scale_chain, canvas_for, ffmpeg_available,
-    poster, probe_duration, probe_image_size, probe_streams, stitch, write_frame_manifest,
+    frame_defect, poster, probe_duration, probe_image_size, probe_streams, stitch,
+    write_frame_manifest,
 )
 
 needs_ffmpeg = pytest.mark.skipif(not ffmpeg_available(), reason="ffmpeg not on PATH")
@@ -32,6 +33,58 @@ def _png(path: Path, w=108, h=192, rgb=(200, 40, 40)):
     path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
                      + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
     return path
+
+
+def _png_banded(path: Path, w=384, h=672, rgb=(210, 205, 200),
+                band=(0.76, 0.95), band_rgb=(0, 0, 0)):
+    """A bright frame with a hard vertical band — the provider defect this guards against.
+
+    Defaults mirror the real failure: a band from 76% to 95% of the width, i.e. content, bar,
+    then a sliver of scene at the right edge (a plain right-hand letterbox would be a
+    different, benign shape).
+    """
+    def chunk(tag, data):
+        c = tag + data
+        return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c))
+    x0, x1 = int(w * band[0]), int(w * band[1])
+    row = b"".join(bytes(band_rgb if x0 <= x < x1 else rgb) for x in range(w))
+    raw = b"".join(b"\x00" + row for _ in range(h))
+    path.write_bytes(b"\x89PNG\r\n\x1a\n"
+                     + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+    return path
+
+
+# ---- generated-frame sanity ------------------------------------------------------------
+# Frame 0 is attached as the reference for every later frame, so a band in it is reproduced
+# into the whole reel — six frames of one real clone carried an identical 143px band while
+# thirteen frames of two other clones were clean. These pin the two halves of the rule.
+@needs_ffmpeg
+def test_a_barred_frame_is_rejected(tmp_path):
+    defect = frame_defect(_png_banded(tmp_path / "barred.png"))
+    assert defect and "black band" in defect
+
+
+@needs_ffmpeg
+def test_an_ordinary_frame_is_accepted(tmp_path):
+    assert frame_defect(_png(tmp_path / "plain.png", w=384, h=672, rgb=(200, 40, 40))) is None
+
+
+@needs_ffmpeg
+def test_a_legitimately_dark_frame_is_not_mistaken_for_a_bar(tmp_path):
+    """A night shot is all dark columns. Judging it on darkness alone would refuse to render
+    every low-key clip and burn three generations doing it, so the rule needs the frame to be
+    mostly BRIGHT before a dark run means anything."""
+    assert frame_defect(_png(tmp_path / "night.png", w=384, h=672, rgb=(6, 6, 8))) is None
+
+
+@needs_ffmpeg
+def test_an_unreadable_frame_is_not_treated_as_defective(tmp_path):
+    """Fail open. A probe that cannot run is not evidence of a bad frame, and turning it into
+    one would make a missing ffmpeg present as three futile regenerations then an abort."""
+    bad = tmp_path / "truncated.png"
+    bad.write_bytes(b"\x89PNG\r\n\x1a\nnot actually a png")
+    assert frame_defect(bad) is None
 
 
 def _frames(tmp_path, durations):
