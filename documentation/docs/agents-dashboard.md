@@ -76,7 +76,7 @@ The board is organized around the pipeline's stages and the hub's resource group
 | Activity | `GET /api/events` (`log` channel), `GET /api/logs` | the Floor Log — lifecycle events grouped into per-run threads across every agent |
 | Evals | `GET /api/evals` | score-trend charts (Recharts) per agent/target type |
 | Playbook | `GET/POST /api/insights`, `GET /api/corpus/{platform}/factors` | the winning formula, the ranked lift field, and the shared cross-agent memory exchange |
-| Config | `GET/PUT /api/config/{platform}`, `GET/PUT /api/schedule[/{platform}]` | the Bench — niche weights, keywords, `pages.txt`, and automatic runs |
+| Config | `GET/PUT /api/config/{platform}`, `GET/PUT /api/schedule[/{platform}]`, `GET/PUT /api/config/agent/{agent}` | the Bench — niche weights, keywords, `pages.txt`, and automatic runs, plus the **Scrape row** (`reels_per_creator`, the real per-creator scrape size) and the **Media gate** card (`virality.media_filter` — `min_tier`/`min_score`/`max_downloads`). Also hosts **Keys & models**, the single consolidated per-agent config modal |
 
 See [Pipeline](architecture.md) for how these views map onto the eight pipeline stages, and [API Reference](api-reference.md) for the full route contract.
 
@@ -85,9 +85,10 @@ See [Pipeline](architecture.md) for how these views map onto the eight pipeline 
 Each card reports **its own stage**, not the end of the pipeline. That distinction is the
 whole point: `watchlist` moves when you add a handle, `scraped_items` when the scrape
 finishes, `items`/`viral` only after `analyze`. Reading them all off the scored corpus — as
-the board once did — meant a freshly added handle showed "0 pages" and 250 scraped reels
+the board once did — meant a freshly added handle showed "0 pages" and a batch of scraped reels
 showed "0 reels" until two more stages had run, so a working pipeline was indistinguishable
-from a broken one.
+from a broken one. (The Config view's Scrape row anchors the batch size on the platform's real
+`reels_per_creator`, 100 for the shipped Instagram config, not the backend's raw `250` default.)
 
 | Card | Count | Action |
 |---|---|---|
@@ -161,14 +162,14 @@ Default (unnamed) SSE frames carry a snapshot of the hub's in-memory `JOBS` map 
 
 ### Channel 2: the `log` channel → Activity + Agent Desk
 
-Named `event: log` frames carry newly appended lifecycle events — the same curated stream every agent writes via `POST /api/logs`. Two consumers read it:
+Named `event: log` frames carry newly appended lifecycle events — the same curated stream every agent writes via `POST /api/logs`. The emitters are not only the sibling agents: ReelScraper's own **Scrape** and **Media** stages (`scrape.py`, `download_media.py`) now post the same `run.start`/`item.start`/`item.done`/`run.end` lifecycle (Media with a `"Downloading"` stage label), so a scrape or media run shows as a live per-reel thread on the Activity feed and Agent Desk too. Two consumers read it:
 
 - **Activity view** — `useLogStream(max=200)` seeds from `GET /api/logs` on mount, then appends each live `log` frame into a bounded ring buffer.
 - **Agent Desk board** — `useAgentBoard(name, platform)` folds live `log` events on top of a periodic `GET /api/agents/{name}/board` snapshot, so lanes move between fetches without re-querying the server on every event.
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Agent process<br/>(AnalysisEngine / SimilarContent / AutoSearch)
+    participant Agent as Agent process<br/>(AnalysisEngine / SimilarContent / AutoSearch /<br/>ReelScraper scrape + media)
     participant Hub as Hub (ReelScraper api/app.py)
     participant SSE as SSE /api/events (log channel)
     participant Hook as useLogStream()
@@ -231,16 +232,16 @@ The producer registry is the mechanism that lets a brand-new agent appear on the
 
 1. On startup, every agent calls `POST /api/producers/register` with its manifest — `name`, `kind`, `consumes[]`, `human_gate`, `needs_reference`, `produces`, `output_status`, `config_schema`, `secrets[]`, `workflow_stages[]`. The call is an idempotent upsert by `name`, persisted to `producers/registry.json`.
 2. The Dashboard calls `GET /api/producers` to get the full roster and renders one lane-board per registered producer.
-3. Each board's lane labels, config form fields, and secret-presence indicators are all driven by that manifest — not by a switch statement in the frontend.
+3. Each board's lane labels and secret-presence indicators are driven by that manifest — not by a switch statement in the frontend. **Per-agent config forms are no longer inline on each agent board:** an agent board (`AgentBoardView`) carries a **Config** button that navigates to a single consolidated modal in the **Config** section ("Keys & models", `KeysAndModels.tsx` → `AgentConfigModal.tsx`), rather than rendering its own settings form in place.
 
 ```mermaid
 flowchart LR
     A[New producer spun from<br/>_producer-template] -->|POST /api/producers/register<br/>on startup| Hub[Hub: producers/registry.json]
     Hub -->|GET /api/producers| Dash[Dashboard]
-    Dash -->|renders automatically| Lane[New lane board,<br/>config form, secrets panel]
+    Dash -->|renders automatically| Lane[New lane board +<br/>manifest-driven lanes/secrets;<br/>Config button → consolidated modal]
 ```
 
-Because the manifest also carries `config_schema` (for `GET/PUT /api/config/agent/{agent}`, a schema-driven settings form) and `secrets[]` (resolved against `GET /api/config/agent/{agent}/secrets/status`, which reports presence only — never values), a new producer gets a working settings panel and secrets indicator for free, with no Dashboard code change. This is the practical meaning of "the hub is the single integration point": the frontend integrates with the *registry*, not with any individual agent.
+Because the manifest also carries `config_schema` (for `GET/PUT /api/config/agent/{agent}`) and `secrets[]` (resolved against `GET /api/config/agent/{agent}/secrets/status`, which reports presence only — never values), a new producer gets its settings surfaced for free — through the **one consolidated schema-driven config modal** in the Config section (reached from that agent board's Config button), plus its manifest-driven lane labels and secret indicators — with no Dashboard code change. This is the practical meaning of "the hub is the single integration point": the frontend integrates with the *registry*, not with any individual agent.
 
 !!! note "Keys & models reads the roster, not the registry"
     Registration is lazy — an agent registers when its CLI first runs — so on a clean clone the registry is empty. The **Keys & models** panel therefore reads [`GET /api/agents`](api-reference.md#producers), which always carries the built-in agents with their key status computed live, and marks the ones that have never run as *not started yet*. Without it the panel was empty on a fresh install and could say nothing about the key that gates the Blueprint stage — the one thing a first-run user most needs to know.

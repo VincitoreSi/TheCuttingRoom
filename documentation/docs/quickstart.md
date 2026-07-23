@@ -145,7 +145,7 @@ Runs the 4-signal virality engine (`engagement_rate`, `reach_multiplier`, `outli
 curl -X POST http://127.0.0.1:8787/api/pipeline/instagram/media
 ```
 
-Downloads the top-viral clips locally to `media/instagram/<content_id>.mp4` (+ thumbnail) so they can play inline in the Dashboard and be watched by AnalysisEngine.
+Downloads the tier-gated top clips (per `virality.media_filter`) locally to `media/instagram/<content_id>.mp4` (+ thumbnail) so they can play inline in the Dashboard and be watched by AnalysisEngine.
 
 ### 5. Blueprint (AnalysisEngine)
 

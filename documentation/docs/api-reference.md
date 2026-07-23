@@ -106,7 +106,7 @@ is `null` and `reason` says what that is.
 
 | Method & path | Purpose |
 |---|---|
-| `GET /api/config/{platform}` | Read the platform's `niche_config.json` (weights/tiers/keywords) plus its `pages.txt` lines. |
+| `GET /api/config/{platform}` | Read the platform's `niche_config.json` plus its `pages.txt` lines. Editable config includes the virality `weights`/`tiers`, `discovery.keywords`, `reels_per_creator` (reels pulled per creator), and `virality.media_filter` (the tier/score gate — `min_tier`, optional `min_score`, optional `max_downloads` — that governs which clips are downloaded and sent to paid analysis). |
 | `PUT /api/config/{platform}` | Whole-file overwrite of config and/or pages. |
 | `GET /api/config/agent/{agent}` | Read a producer/agent's hub-stored config; defaults are populated from its registered manifest's `config_schema`. |
 | `PUT /api/config/agent/{agent}` | Write an agent's config — the Dashboard renders this as a schema-driven form. |
@@ -275,7 +275,7 @@ AnalysisEngine watches downloaded clips frame-by-frame and writes rich, generati
 |---|---|
 | `GET /api/analysis/{platform}` | List all saved analyses for the platform. |
 | `POST /api/analysis/{platform}` | Save an analysis (blueprint). |
-| `GET /api/analysis/{platform}/pending?min_score=&tier=&min_duration=&max_duration=&content_type=&limit=&reanalyze=<id>&stale=true` | The analysis work queue — top-viral clips with media downloaded but not yet analyzed, or flagged for re-analysis; also surfaces reference (`is_reference`) items. |
+| `GET /api/analysis/{platform}/pending?min_score=&tier=&min_duration=&max_duration=&content_type=&limit=&reanalyze=<id>&stale=true` | The analysis work queue — tier-gated top clips with media downloaded but not yet analyzed, or flagged for re-analysis; also surfaces reference (`is_reference`) items. When neither `min_score` nor `tier` is passed, the queue applies the platform's `virality.media_filter` tier cutoff as a **default `min_score` floor**, so paid analysis never runs on a below-tier clip; an explicit `min_score`/`tier` overrides it. |
 | `GET /api/analysis/{platform}/{content_id}` | Fetch one blueprint. Also serves `ref_<hash>` reference blueprints via the same route. |
 
 ```json title="POST /api/analysis/{platform} — VideoAnalysisIn (abridged)"
@@ -526,7 +526,7 @@ Per-platform, stored in `config/pipeline_cascade.json` (gitignored — per-insta
 |---|---|---|---|
 | `enabled` | bool | `false` | Master switch. Off by default — no data is ever read or counted while disabled. |
 | `include_blueprints` | bool | `false` | Whether `analysis-engine` (a paid API per clip) may fire unattended. Must be explicitly opted into. |
-| `scrape_count` | int | `250` | One batch: the amount of new raw material the whole chain is sized against. 1..5000. |
+| `scrape_count` | int | `250` | One batch: the amount of new raw material the whole chain is sized against. 1..5000. The **backend** default is `250`, but the Dashboard's cascade **Scrape** row is seeded from the platform's real `reels_per_creator` (100 for the shipped Instagram config), not the raw `250` — the stored backend default is unchanged either way. |
 | `analyze_pct` | int | `100` | How much of the scraped batch is expected to reach `analyze`. 1..100. |
 | `media_pct` | int | `60` | How much of the analyzed output is worth downloading. 1..100. |
 | `blueprint_pct` | int | `20` | How much of the downloaded media is worth a **paid** blueprint. 1..100. |

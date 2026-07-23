@@ -1,6 +1,6 @@
 # Agent: AnalysisEngine
 
-AnalysisEngine is the pipeline's **analyzer**. It watches the top-viral clips that the `media` stage has downloaded, walks them frame-by-frame with Gemini, and writes back a rich, generation-ready **blueprint** — the shared substrate that every producer (SimilarContent, and future proposal/idea/template agents) reads before it writes anything.
+AnalysisEngine is the pipeline's **analyzer**. It watches the tier-gated top clips that the `media` stage has downloaded, walks them frame-by-frame with Gemini, and writes back a rich, generation-ready **blueprint** — the shared substrate that every producer (SimilarContent, and future proposal/idea/template agents) reads before it writes anything.
 
 It occupies the **Blueprint** stage of the [8-stage pipeline](architecture.md) (labeled "Blueprint" on the board, not "Analyze," to avoid collision with the scoring stage that already runs inside ReelScraper).
 
@@ -88,6 +88,9 @@ sequenceDiagram
 ## Stage-by-stage notes
 
 **Pull pending.** The queue comes from `GET /api/analysis/{platform}/pending`, ranked by virality before it is sliced, and filterable by `min_score`, `tier`, `min_duration`, `max_duration`, `content_type`, and `limit`; it also accepts `reanalyze=<content_id>` and `stale=true` to force re-analysis of a specific or aging item. Reference items (`GET /api/reference/{platform}/pending`) are appended to the same run unless `--no-references` is passed.
+
+!!! note "The pending queue applies the media tier gate as a default floor"
+    When the caller passes **no** explicit `min_score` or `tier`, the endpoint resolves the platform's `virality.media_filter` (`core/virality.resolve_media_filter`) and applies its tier cutoff as a **default `min_score` floor** — the SAME gate that governed the download. This keeps paid analysis from ever running on a below-tier clip that a looser earlier gate happened to download. An explicit per-request `min_score`/`tier` still wins, so the documented filters behave exactly as before when supplied.
 
 Two of those filters have defaults the agent applies on every run, so a manual Run from the Board is rationed the same way an unattended firing is:
 

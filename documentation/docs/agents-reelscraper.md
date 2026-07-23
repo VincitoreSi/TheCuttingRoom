@@ -60,7 +60,9 @@ This stage also writes xlsx/CSV reports and indexes results into per-platform me
 
 ### Media
 
-`download_media.py` persists the top-viral clips' actual video files to `media/<platform>/<content_id>.mp4` (plus a `.jpg` thumbnail), keyed by the universal `content_id`. This is what makes inline playback possible on the Dashboard board and what gives [AnalysisEngine](agents-analysisengine.md) something to point Gemini at frame-by-frame.
+`download_media.py` persists the tier-gated top clips' actual video files to `media/<platform>/<content_id>.mp4` (plus a `.jpg` thumbnail), keyed by the universal `content_id`. This is what makes inline playback possible on the Dashboard board and what gives [AnalysisEngine](agents-analysisengine.md) something to point Gemini at frame-by-frame.
+
+Selection is **governed by `niche_config.json`'s `virality.media_filter`**, not a hardcoded top-N by raw score. `download_media.py` accepts `--min-tier <label>` / `--min-score <n>` / `--top <n>`: it applies the tier/score **gate** first and only then caps to `--top`, so excluding a tier can never be topped back up with the very clips it excluded. `--min-score` overrides `--min-tier`, and `--min-tier` is mapped to a score through the platform's own tiers so the labels match the scoring engine exactly. When the hub launches this stage it forwards the resolved gate automatically: `_media_stage_cmd` calls `core/virality.resolve_media_filter` on `niche_config.json` to turn `media_filter` (`min_tier` → score, optional `min_score`, optional `max_downloads`) into `--min-score`/`--top` flags. No `media_filter` = no flags = the pre-gate top-60 behavior, unchanged.
 
 ## Scrape → Analyze → Media, end to end
 
@@ -96,13 +98,20 @@ sequenceDiagram
     D->>H: POST /api/pipeline/instagram/media
     H->>J: JOBS[job_id3] = {status: "queued"}
     H->>M: subprocess: python download_media.py instagram
-    M->>M: persist top clips to media/instagram/<content_id>.mp4 + .jpg
+    M->>H: POST /api/logs run.start {stage:"Downloading", total}
+    M->>H: POST /api/logs item.start {stage:"Downloading", i, of} (per reel)
+    M->>M: persist tier-gated clips to media/instagram/<content_id>.mp4 + .jpg
+    M->>H: POST /api/logs item.done {stage:"Done", ok} (per reel)
+    M->>H: POST /api/logs run.end {stage:"Done", downloaded, present, failed}
+    SSE-->>D: event: log frames (live per-reel Downloading thread)
     M-->>H: exit code + tail
     H->>J: JOBS[job_id3] = {status: "done"}
     SSE-->>D: unnamed frame: JOBS snapshot
 ```
 
 `analyze` and `media` follow the identical stage-runner → subprocess → `JOBS` → SSE shape as `scrape` — only the command and working directory differ. The same machinery also launches `analysis-engine`, `auto-search`, and `auto-search-beat`, which shell into the sibling `AnalysisEngine` and `AutoSearch` projects instead of running local scripts.
+
+Both **Scrape and Media are lifecycle emitters**: `download_media.py` now speaks the same `HubEvents` vocabulary as the scraper — `run.start` / `item.start` / `item.done` / `run.end` posted to `POST /api/logs` (with a `"Downloading"` stage label) — so a media run shows up as a **live per-reel thread** on the Activity feed / Agent Desk, exactly like a scrape run, instead of being an invisible black-box job. A failed clip (usually an expired CDN link) posts an `item.done` warning rather than an `item.error`, and the run itself still exits 0.
 
 ## How the hub exposes this to the Dashboard
 

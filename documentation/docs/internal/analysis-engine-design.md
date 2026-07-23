@@ -182,7 +182,9 @@ evaluation:            # stamped by the self-eval pass (see below)
 - `GET /api/analysis/<platform>/pending` — ranked queue of clips WITH local media but NO analysis. **This
   is where the analysis-focused filters live** (see the hub contract below). Supports
   `min_score`, `tier`, `min_duration`/`max_duration`, `content_type`, `limit`, and `reanalyze=<content_id>`
-  / `stale=true` (re-run when `schema_version` is old). Polled to know what to analyze next.
+  / `stale=true` (re-run when `schema_version` is old). Polled to know what to analyze next. When neither
+  `min_score` nor `tier` is supplied, the queue floors on the platform's `virality.media_filter` tier cutoff
+  by default, so it never offers up a below-tier clip for paid analysis.
 - `GET /api/corpus/<platform>/factors` and `GET /api/corpus/<platform>/brief?q=` — optional context to
   ground the analysis (what's winning on this platform) — read-only.
 - `GET /api/analysis/<platform>` and `.../<content_id>` — read existing blueprints (for `reanalyze`/diff).
@@ -237,7 +239,12 @@ AnalysisEngine produces a rich, generation-ready analysis blueprint and writes i
 2. **Analysis-focused filters on `GET /api/analysis/<platform>/pending`.** Query params:
    `min_score`, `tier`, `min_duration`, `max_duration`, `content_type`, `limit`, plus `reanalyze=<content_id>`
    and `stale=true` (surfacing clips whose stored blueprint has an older `schema_version`). The default
-   behavior (unanalyzed clips with local media, ranked by virality) is unchanged when no filters are passed.
+   behavior (unanalyzed clips with local media, ranked by virality) is unchanged when no filters are passed —
+   **except** that when the caller names neither `min_score` nor `tier`, the queue applies the platform's
+   `virality.media_filter` tier cutoff (via `core/virality.resolve_media_filter`) as a **default `min_score`
+   floor**. This is the same gate that governed the download, so paid analysis never runs on a below-tier
+   clip that a looser earlier gate happened to download; an explicit per-request `min_score`/`tier` overrides
+   the floor.
 3. **`brief` endpoint:** the "Visual formulas" assembly reads `virality_formula`
    (`hook` / `retention_devices` / `replicable_formula`) from schema-2 docs, and still falls back to the
    old lean fields for legacy docs.
