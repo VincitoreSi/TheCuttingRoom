@@ -408,9 +408,8 @@ export function ConfigView() {
           />
           <p className="text-[13px] text-[var(--ink-dim)] mb-3">
             Only clips at or above this tier have their video saved and sent to the{" "}
-            <strong>paid</strong> analysis stage — nothing below it is ever downloaded or
-            analyzed. Tightening this is the simplest way to spend less; widening it works more of
-            the corpus.
+            <strong>paid</strong> analysis stage — nothing below it is ever downloaded or analyzed.
+            Tightening this is the simplest way to spend less; widening it works more of the corpus.
           </p>
           <div className="flex items-center gap-3 flex-wrap mb-3">
             <label className="text-[13px] text-[var(--ink-dim)]" htmlFor="media-min-tier">

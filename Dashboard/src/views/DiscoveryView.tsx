@@ -13,7 +13,14 @@ import {
 } from "../lib/hooks";
 import { Badge, Button, Card, EmptyState, Eyebrow, SectionHead } from "../components/ui";
 import { TapeGauge } from "../components/gauges";
-import { IconCheck, IconDiscover, IconExternal, IconPin, IconSearch, IconX } from "../components/icons";
+import {
+  IconCheck,
+  IconDiscover,
+  IconExternal,
+  IconPin,
+  IconSearch,
+  IconX,
+} from "../components/icons";
 import { compact } from "../lib/format";
 import { statusTone } from "../lib/statusTone";
 import { safeUrl } from "../lib/url";
