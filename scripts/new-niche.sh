@@ -88,7 +88,7 @@ fi
 
 # ── transform: YAML → per-platform niche_config.json + pages.txt ─────────────────
 # The Python overlays niche-specific values onto the EXISTING niche_config.json so all
-# structural/comment fields (_comment_*, discovery mechanics, top_n, _note) are preserved.
+# structural/comment fields (_comment_*, top_n, _note) are preserved.
 "${PY[@]}" - "$NICHE_FILE" "$REPO_ROOT" <<'PYEOF'
 import json, sys
 from pathlib import Path
@@ -142,13 +142,12 @@ for platform, pconf in platforms.items():
     if "tiers" in pconf:
         vir["tiers"] = pconf["tiers"]
 
-    # discovery block (instagram only in the shipped config)
+    # discovery block (instagram only in the shipped config). AutoSearch reads ONLY
+    # `keywords`; nothing else in this block gates the live discovery run.
     disc = pconf.get("discovery")
     if disc and isinstance(cfg.get("discovery"), dict):
         if "keywords" in disc:
             cfg["discovery"]["keywords"] = list(disc["keywords"])
-        if "seeds" in disc:
-            cfg["discovery"]["seeds"] = list(disc["seeds"])
 
     cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     changed.append(str(cfg_path.relative_to(repo_root)))
@@ -185,7 +184,7 @@ cat <<EOF
 ──────────────────────────────────────────────────────────────────────────────
   Wrote (and staged) for instagram / x / youtube:
     • niche_config.json   ← niche name, weights, tiers, per-creator limits
-                            (instagram also: discovery keywords/seeds)
+                            (instagram also: discovery keywords)
     • pages.txt           ← EXAMPLE seed handles — replace with real creators
 
   Next steps:
