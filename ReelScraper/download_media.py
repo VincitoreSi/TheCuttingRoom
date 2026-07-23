@@ -18,6 +18,7 @@ import sys, json, time, argparse, logging, urllib.request
 from pathlib import Path
 
 from core.atomicio import atomic_path
+from core.hubevents import HubEvents
 from core.logsetup import setup_logging
 from core.virality import load_config, tier_threshold
 
@@ -67,7 +68,12 @@ def main():
     ap.add_argument("--min-tier", default=None,
                     help="only download clips at or above this tier label (from niche_config)")
     args = ap.parse_args()
-    setup_logging("media", platform=args.platform)
+    run_id = setup_logging("media", platform=args.platform)
+    # Media was the one pipeline stage the Activity feed never showed: the hub spawns it blind
+    # and its `core/logsetup` output lands in a file the hub never reads, so a clean run was
+    # invisible on the Floor Log. Speak the SAME lifecycle vocabulary the scraper does —
+    # run.start / item.* / run.end via BACKEND_API — so media gets a live per-reel thread too.
+    events = HubEvents("media", run_id=run_id, platform=args.platform)
 
     cj = ROOT / "platforms" / args.platform / "content.json"
     if not cj.exists():
@@ -88,19 +94,42 @@ def main():
 
     out = ROOT / "media" / args.platform
     out.mkdir(parents=True, exist_ok=True)
+    # Plan up front so the count is known before the first fetch. A reel is "planned" only if
+    # it has a live media_url and no .mp4 already on disk — the exact set the loop attempts and
+    # the exact set that gets an item.* thread. `total` rides on every item.start as well as on
+    # run.start: the Dashboard's 300-event log ring evicts run.start first on a long run, so a
+    # reducer reading the total only from there would go blank exactly when it matters.
+    planned = sum(1 for r in rows if r.get("content_id") and r.get("media_url")
+                  and not (out / f"{r['content_id']}.mp4").exists())
+    # NOT "media" as the stage label — liveStageIndex ORs `data.stage` against each board
+    # node's pipeline key, so a literal "media" would light the media node from the wrong axis.
+    events.emit("run.start", msg=f"downloading {planned} reels",
+                data={"stage": "Downloading", "total": planned})
     got = skip = fail = 0
+    n = 0
     for r in rows:
         cid = r.get("content_id")
         if not cid:
             continue
         mp4, jpg = out / f"{cid}.mp4", out / f"{cid}.jpg"
         if r.get("media_url") and not mp4.exists():
+            n += 1
+            events.emit("item.start", content_id=cid, msg=f"downloading {cid}",
+                        data={"stage": "Downloading", "i": n, "of": planned})
             try:
                 _get(r["media_url"], mp4); got += 1
                 log.info("downloaded", extra={"file": f"{cid}.mp4"})
+                events.emit("item.done", content_id=cid, msg=f"{cid}: downloaded",
+                            data={"stage": "Done", "ok": True})
             except Exception as e:
                 fail += 1
                 log.warning("download failed", extra={"file": f"{cid}.mp4", "err": str(e)})
+                # A failed clip is a WARNING that still exits 0 — expired CDN links are the
+                # normal case — never item.error, which would falsely snap the whole media
+                # thread red the way the scraper refuses to for an unresolved creator.
+                events.emit("item.done", level="warning", content_id=cid,
+                            msg=f"{cid}: download failed ({e})",
+                            data={"stage": "Done", "ok": False})
             time.sleep(0.6)
         else:
             skip += 1
@@ -109,6 +138,10 @@ def main():
             except Exception: pass
     log.info("media done", extra={"platform": args.platform, "downloaded": got, "present": skip,
                                   "failed": fail, "dir": str(out)})
+    # level="info" ALWAYS: a failed clip already carried its own warning, and the run itself
+    # exits 0 whether or not a CDN link expired — painting run.end red would lie about that.
+    events.emit("run.end", msg=f"{got} downloaded, {skip} present, {fail} failed",
+                data={"stage": "Done", "downloaded": got, "present": skip, "failed": fail})
     if fail:
         log.info("failures are usually expired CDN links — re-scrape then re-run soon after")
     print(f"DONE [{args.platform}]: {got} downloaded, {skip} present, {fail} failed -> {out}", flush=True)
