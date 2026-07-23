@@ -42,6 +42,35 @@ export const CASCADE_LIMITS = {
 
 export type CascadeField = keyof typeof CASCADE_LIMITS;
 
+/** The real per-creator scrape size — niche_config.json's `reels_per_creator`, which is what
+    scrape.py passes as `--limit`. This, not the cascade's `scrape_count`, is the number the
+    scraper actually used, so it anchors the funnel and is what the Scrape row edits. Its
+    fallback is 100 — scrape.py's own default when the field is absent — deliberately NOT the
+    cascade's misleading 250 batch default. Bounds match `scrape_count` so the anchor and its
+    input agree. */
+export const REELS_PER_CREATOR = { min: 1, max: 5000, fallback: 100 } as const;
+
+/** Coerce a `reels_per_creator` value into range, reading anything that never arrived (an
+    older config, a cleared input box) as the 100 default rather than propagating NaN. Mirrors
+    clampCascadeField, kept separate because it is a niche_config field, not a cascade one. */
+export function reelsPerCreator(raw: unknown): number {
+  const { min, max, fallback } = REELS_PER_CREATOR;
+  // null/undefined is an absent field, "" is an emptied box — both read as the default, not
+  // as Number(null|"")===0 clamped to the floor, which would misreport a mid-edit box as 1.
+  const blank = raw == null || (typeof raw === "string" && raw.trim() === "");
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (blank || !Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(n)));
+}
+
+/** The write-through payload for a Scrape-row edit. The hub overwrites niche_config.json
+    wholesale on PUT /api/config, so an edit has to carry the WHOLE config with just
+    `reels_per_creator` replaced — dropping the weights/tiers/keywords that share the file
+    would silently reset the scoring engine. Returns a fresh object; the input is untouched. */
+export function withReelsPerCreator<T extends Record<string, unknown>>(config: T, n: number): T {
+  return { ...config, reels_per_creator: reelsPerCreator(n) };
+}
+
 /** Coerce one field into its own range. Anything that is not a finite number never
     arrived (an older hub, a cleared input box) and reads as the default rather than
     propagating NaN into every row below it. */
