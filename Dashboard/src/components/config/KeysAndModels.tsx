@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useAgentConfig, useAgents, useSaveAgentConfig } from "../../lib/hooks";
-import { Badge, Card, EmptyState, Eyebrow, Input, SectionHead, Select } from "../ui";
-import { IconCheck, IconProducers } from "../icons";
+import { useShell } from "../../App";
+import { Badge, Button, Card, EmptyState, Eyebrow, Input, SectionHead, Select } from "../ui";
+import { IconCheck, IconConfig, IconProducers } from "../icons";
 import { cx } from "../../lib/cx";
 import { ConfigField } from "./ConfigField";
+import { AgentConfigModal } from "./AgentConfigModal";
 import { humanizeAgent } from "../../lib/agents";
 import type { AgentRosterEntry, JSONSchemaProp, SecretStatus } from "../../lib/types";
 
@@ -78,6 +80,7 @@ export function KeysAndModels() {
 }
 
 function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
+  const { configAgent, clearConfigAgent } = useShell();
   /* An unregistered agent has no stored config to fetch — asking would 404. Its KEYS are
      still knowable (the hub reads the agent's .env directly), which is the whole point. */
   const cfgQ = useAgentConfig(p.registered ? p.name : null);
@@ -86,10 +89,22 @@ function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
   // semantics: we persist the whole map, only ever mutating a model field.
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [saved, setSaved] = useState(false);
+  // Which agent's full-config modal is open (this row's name, or null).
+  const [openFor, setOpenFor] = useState<string | null>(null);
 
   useEffect(() => {
     if (cfgQ.data) setValues({ ...cfgQ.data.defaults, ...cfgQ.data.config });
   }, [cfgQ.data]);
+
+  // Cross-view nav: a board's Config button stashed a pending target and switched
+  // here. If it names this agent, pop its modal once and clear the intent so a
+  // later visit to Config does not re-open it. Guarded on registration — an
+  // unregistered agent has no stored config to edit.
+  useEffect(() => {
+    if (configAgent !== p.name) return;
+    clearConfigAgent();
+    if (p.registered) setOpenFor(p.name);
+  }, [configAgent, p.name, p.registered, clearConfigAgent]);
 
   const secrets = p.secrets ?? [];
   const props = cfgQ.data?.config_schema?.properties ?? {};
@@ -115,6 +130,20 @@ function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
             <IconCheck size={12} /> saved
           </span>
         )}
+        {/* Full-config editor lives in a modal — the button opens it here. An
+            unregistered agent has no stored config to fetch, so it is disabled
+            until the agent runs (mirrors the model column's !registered copy). */}
+        <Button
+          variant="ghost"
+          size="sm"
+          style={{ marginLeft: "auto" }}
+          onClick={() => setOpenFor(p.name)}
+          disabled={!p.registered}
+          title={p.registered ? undefined : "available once it runs"}
+          aria-label={`Configure ${p.name}`}
+        >
+          <IconConfig size={14} /> Configure
+        </Button>
       </div>
 
       <div className="km-agent__grid">
@@ -160,6 +189,8 @@ function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
           )}
         </div>
       </div>
+
+      {openFor && <AgentConfigModal agent={openFor} onClose={() => setOpenFor(null)} />}
     </div>
   );
 }

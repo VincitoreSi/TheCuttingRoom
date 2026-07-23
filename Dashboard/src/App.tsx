@@ -27,6 +27,13 @@ interface Shell {
   connected: boolean;
   selectedAgent: string | null;
   openAgent: (name: string) => void;
+  /* The agent whose config modal should open on the next Config mount, or null.
+     A board's Config button sets this and switches to the Config view; the
+     Keys & models panel reads it once on arrival and clears it (below) so a
+     later visit to Config does not re-pop the modal. */
+  configAgent: string | null;
+  openAgentConfig: (name: string) => void;
+  clearConfigAgent: () => void;
 }
 const ShellCtx = createContext<Shell>(null!);
 export const useShell = () => useContext(ShellCtx);
@@ -35,6 +42,7 @@ export function App() {
   const [view, setView] = useState<ViewKey>("dashboard");
   const [platform, setPlatform] = useState("instagram");
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [configAgent, setConfigAgent] = useState<string | null>(null);
   const { jobs, connected } = usePipelineEvents();
   const reduced = useReducedMotion();
   // when a stage finishes, refresh the REST resources it touched (§9.5)
@@ -45,9 +53,29 @@ export function App() {
     setView("agent");
   }
 
+  // A board's Config button navigates to the Config section and stashes which
+  // agent's modal to open; the Keys & models panel consumes and clears it.
+  function openAgentConfig(name: string) {
+    setConfigAgent(name);
+    setView("config");
+  }
+  function clearConfigAgent() {
+    setConfigAgent(null);
+  }
+
   const shell = useMemo<Shell>(
-    () => ({ platform, setPlatform, jobs, connected, selectedAgent, openAgent }),
-    [platform, jobs, connected, selectedAgent],
+    () => ({
+      platform,
+      setPlatform,
+      jobs,
+      connected,
+      selectedAgent,
+      openAgent,
+      configAgent,
+      openAgentConfig,
+      clearConfigAgent,
+    }),
+    [platform, jobs, connected, selectedAgent, configAgent],
   );
 
   const platformsQ = usePlatforms();
