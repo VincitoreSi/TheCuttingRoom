@@ -26,6 +26,10 @@ rules matter for everyone running it:
   never stores a secret value. Keep it that way in contributions.
 - Use **burner accounts** for any platform session used by the scraper — never a
   personal or primary account.
+- Discovery (AutoSearch) uses a burner Instagram `IG_SESSIONID` — an environment variable, or a
+  gitignored `AutoSearch/session.txt` — to search for new creators. It is optional (guest-only
+  discovery works without it) and, like every session cookie, must be a **burner**, never a
+  personal account.
 
 ## Known exception: `demo-data/` contains real scraped data
 

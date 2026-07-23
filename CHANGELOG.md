@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A media tier gate.** `virality.media_filter` (`{min_tier, min_score?, max_downloads?}`,
+  default `min_tier: "Viral"`, `max_downloads: 60`) decides which scored clips are eligible to
+  download — and because only downloaded clips reach the blueprint stage, the same gate bounds
+  how much *paid* analysis runs. `download_media.py` takes `--min-tier` / `--min-score` / `--top`
+  as ad-hoc overrides, and a **Media gate** card in Config edits the persisted filter beside the
+  cascade knobs. Replaces the fixed `media --top 60`.
+- **Media lifecycle telemetry.** The media stage now posts its own `run.start` / `item.*` /
+  `run.end` to `POST /api/logs`, so the Activity feed shows per-clip download progress instead of
+  a silent elapsed clock — the same treatment the scrapers got in 1.3.0.
+- **`reels_per_creator` is editable in Config**, and the heartbeat's Scrape row is anchored on it
+  rather than on a separate hidden number, so the funnel's first stage reads the same cap the
+  scraper enforces.
+- **One config surface per agent.** Keys and model settings now live in a single **Keys & models**
+  modal reached from a **Config** button on the board, rather than being spread across per-agent
+  desks.
+
+### Changed
+- **The Propose stage auto-heals.** With no producer declaring `proposes:true`, the hub now falls
+  back to its built-in SimilarContent proposer instead of returning 409, so a fresh checkout can
+  propose without a manual registration step. Only the genuinely ambiguous case — *several*
+  producers declaring it — still 409s, and the Board's readiness now reflects that honestly.
+- **Discovery honesty.** Gemini is documented and treated as optional (term-expansion only); the
+  real enabler for live creator search is a burner `IG_SESSIONID` (env var or
+  `AutoSearch/session.txt`) with `guest_only:false`, since guest mode cannot search. Discovery now
+  logs per-query progress and the reason a query returned nothing, and the dead
+  `niche_config.discovery` mechanics fields — read only by a script the hub never launches — were
+  removed, leaving keywords the only discovery config the agent actually reads.
+
 ## [1.3.1] - 2026-07-22
 
 ### Fixed

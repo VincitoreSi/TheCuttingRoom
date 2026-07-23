@@ -94,6 +94,39 @@ the same port. `--rm` is deliberate in that line, because **nothing you do in it
 container.** It starts as a clean, empty studio: no watchlist, no corpus, no keys. It is the
 "show me what this is" path, not the "use it" path.
 
+**Wire your Gemini key in** and blueprints and rendering work too — still ephemeral, but now
+the paid stages run. One command:
+
+```bash
+docker run --rm -p 8787:8787 -e GEMINI_API_KEY="paste-your-gemini-key-here" ghcr.io/vincitoresi/thecuttingroom:latest
+```
+
+or export it once and hand the container just the name:
+
+```bash
+export GEMINI_API_KEY=your-key
+docker run --rm -p 8787:8787 -e GEMINI_API_KEY ghcr.io/vincitoresi/thecuttingroom:latest
+```
+
+`--rm` still means nothing survives: it is a live demo with your key, not a place to keep a
+corpus.
+
+**Persist to a local folder with the published image.** Run this from the repo **root**, so the
+whole checkout mounts at `/app`:
+
+```bash
+docker run --rm -p 8787:8787 -e GEMINI_API_KEY="paste-your-gemini-key-here" -v "$PWD":/app -v tcr-venv-reelscraper:/app/ReelScraper/.venv -v tcr-venv-analysisengine:/app/AnalysisEngine/.venv -v tcr-venv-autosearch:/app/AutoSearch/.venv -v tcr-venv-similarcontent:/app/SimilarContent/.venv ghcr.io/vincitoresi/thecuttingroom:latest
+```
+
+Do **not** run a bare `-v "$PWD":/app` without the four venv volumes: the bind mount masks the
+image's baked-in `.venv`s, and on Apple Silicon the container then execs the host's macOS binary
+and dies with `rc -1`. The named venv volumes seed from the image on first run and keep the
+host's `.venv` (a wrong-arch Mach-O on macOS) out of the container. Mount the **whole** checkout
+at `/app` — every data path lives interleaved with source, so there is no smaller subset that
+persists. Optionally use `-p 127.0.0.1:8787:8787` to match compose's loopback-only publish; the
+hub has no authentication. This is the published-image equivalent of `./cr up`, which remains the
+supported persistence path.
+
 Tags: `latest` and `1.3` / `1.3.1` come from a release; `edge` and `sha-<short>` come from a
 manual run against `main`. Docker picks your architecture automatically.
 
@@ -116,11 +149,14 @@ limit on public images.
 container lane has its own: `./cr keys --set` asks once, writes `GEMINI_API_KEY` to
 `AnalysisEngine/.env`, `SimilarContent/.env` and `AutoSearch/.env`, and verifies it from
 inside the container. Discovery spends nothing on it — term expansion is off by default and
-is a one-click opt-in on the Dashboard's Discover tab.
+is a one-click opt-in on the Dashboard's Discover tab; searching for new creators still needs a
+burner Instagram `IG_SESSIONID`, but only term expansion ever touches Gemini.
 Scrape, analyze and media need no key at all; only blueprints and captions/render do, so
 `./cr up` mentions a missing key without ever blocking on it. Note that exporting
-`GEMINI_API_KEY` in your shell does **not** reach the container — compose has no `env_file` on
-purpose, so keys are read from those per-agent files.
+`GEMINI_API_KEY` in your shell does **not** reach the container in the `./cr up` lane — compose
+has no `env_file` on purpose, so keys are read from those per-agent files. (A raw `docker run -e
+GEMINI_API_KEY` is the deliberate exception above: that lane has no per-agent `.env` to read, so
+the flag is how the key gets in.)
 
 Your checkout is bind-mounted, so keys stay in each agent's own `.env` and the hub still never
 stores a secret value. Windows is **WSL2 only** — clone inside the WSL2 filesystem; there is no
@@ -226,7 +262,8 @@ exist so you *can* drive the agents conversationally, but the pipeline does not 
 | Blueprints (`AnalysisEngine`) | + `GEMINI_API_KEY` | yes — Gemini |
 | Clone recipes (`SimilarContent propose`) | nothing extra | no |
 | Rendering reels (`SimilarContent render`) | + `GEMINI_API_KEY`, **ffmpeg** | yes — ~$0.04/frame |
-| Creator discovery (`AutoSearch`) | nothing extra | no |
+| Creator discovery (`AutoSearch`) — browse / keyword-seed | nothing extra | no |
+| …real Instagram creator **search** | + burner `IG_SESSIONID` (or `AutoSearch/session.txt`) **and** `guest_only:false` | no |
 | …with LLM-widened search terms (opt-in) | + `GEMINI_API_KEY` **and** `term_expansion_enabled` | yes — Gemini |
 
 A first run that only wants to *look* at the system needs **uv and Python**. Scraping and
@@ -251,7 +288,7 @@ $EDITOR ReelScraper/platforms/instagram/pages.txt   # your creators, one per lin
 cd ReelScraper
 uv run cli.py scrape  instagram                 # guest mode, no login
 uv run cli.py analyze instagram                 # score into content.json
-uv run cli.py media   instagram --top 60        # persist the winners locally
+uv run cli.py media   instagram                 # download the clips the tier gate passes
 
 cd ../AnalysisEngine
 uv run cli.py run instagram                     # Gemini -> schema-2 blueprints
@@ -263,6 +300,11 @@ uv run cli.py propose --platform instagram             # publish to the human ga
 #   approve in the Dashboard (Studio -> Proposals), then:
 uv run cli.py render --platform instagram --file <name>.md
 ```
+
+`media` no longer downloads a fixed `--top N`: it obeys `niche_config.json`'s
+`virality.media_filter` (default `min_tier: "Viral"`, `max_downloads: 60`), so only clips at or
+above that tier are downloaded **and** handed to paid analysis. Override ad hoc with
+`--min-tier` / `--min-score` / `--top`.
 
 The rendered reel appears in **Studio → Renders** with its sound sheet, a generated caption,
 and the on-disk path to upload by hand. Instagram has no post API for this, so the last step
@@ -289,6 +331,12 @@ share of a firing's new clips that actually get a blueprint — the top share, s
 is ranked by virality before it is sliced — and `max_duration_s` (30s) refuses clips too long
 to ever be worth remaking. Scraping is capped per creator too: `reels_per_creator` is 100,
 and a creator with fewer than that simply yields all of them.
+
+The download boundary carries a second gate on top of its percentage: `virality.media_filter`
+(`{min_tier, min_score?, max_downloads?}`) is the tier gate that decides which clips are
+*eligible* to download at all — and because only downloaded clips reach the blueprint stage, it
+also bounds how much paid analysis runs. It has its own **Media gate** card in Config, beside
+the cascade knobs.
 
 Two things it will never do. It never runs `render`, which is the only step that spends
 money per frame — that stays behind a human click, by construction rather than by config.
@@ -337,7 +385,7 @@ port. The hub binds loopback only — it is a local tool, not a server.
 | --- | --- | --- |
 | **ReelScraper** | **The hub @ :8787** — scrapes creators, scores virality, and serves the whole `/api/*` contract (corpus, analysis, audio, producers, studio + human gate, references, logs, evals, config/secrets status, SSE). It *is* the pipeline's backend. | serves it |
 | **AnalysisEngine** | Sits after Media. Watches top clips and writes rich, generation-ready **blueprints** (schema_version 2) to `POST /api/analysis/{p}`. The shared substrate every producer reads. | `/api/analysis`, `/api/corpus`, `/api/insights` |
-| **AutoSearch** | Discovery agent (`kind: discovery`). Finds and scores new creators in the niche; results go through the human gate. | `/api/corpus`, `/api/insights`, producer SPI |
+| **AutoSearch** | Discovery agent (`kind: discovery`). Finds and scores new creators in the niche; results go through the human gate. Keyword/seed discovery runs in guest mode; live creator **search** needs a burner `IG_SESSIONID` (or `AutoSearch/session.txt`) with `guest_only:false`, since guest mode cannot search. Gemini is optional — term-expansion only. | `/api/corpus`, `/api/insights`, producer SPI |
 | **SimilarContent** | Producer (`kind: clone`). `propose` turns a blueprint's `shots[]` + `regeneration_guide` into a clone recipe at the human gate; `render` then generates the frames (Nano Banana), stitches them with ffmpeg into a silent 9:16 reel, writes a caption, and uploads it. | producer SPI + `/api/renders` |
 | **Dashboard** | "The Cutting Room" — React control board. Reads/controls everything over HTTP; renders producer lanes, the human gate, sounds, blueprints, activity + evals. | reads all of `/api/*` + SSE |
 | **`_producer-template/`** | The **reusable producer scaffold** — copy it to spin up a new producer. | — |

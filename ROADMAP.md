@@ -13,6 +13,9 @@ mirrors the sections below: *Next* → Next, *Later* → Backlog.
   branch converter (`scripts/new-niche.sh`).
 - ✅ CI/CD: Dashboard checks, Python test matrix, docs site deploy, tagged
   releases.
+- ✅ Containerization: `docker-compose` + `./cr` bring up the hub + Dashboard,
+  a multi-arch image publishes to GHCR on every release, and the README documents
+  both lanes — so running the pipeline needs no manual multi-terminal setup.
 - Harden offline test coverage across all Python components.
 - A one-command local bootstrap (hub + Dashboard) for first-time users.
 
@@ -26,8 +29,6 @@ mirrors the sections below: *Next* → Next, *Later* → Backlog.
   - `creative-idea` — net-new viral concepts cross-referencing factors, formulas,
     and trending audio.
   - `template-content` — apply a reference video's structure to your own topic.
-- **Containerization** — a `docker-compose` that brings up the hub + Dashboard so
-  running the pipeline doesn't require a manual multi-terminal setup.
 - **Pluggable model backends** — make the analysis/generation model providers
   swappable via config rather than per-agent code.
 

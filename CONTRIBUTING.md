@@ -29,6 +29,10 @@ the hub instead.
 
 ## Development setup
 
+Prefer a container? `./cr up` brings up the whole stack with nothing on the host but Docker —
+see the [README](README.md#run-it-in-docker) for that lane. The native setup below is what you
+want when you are editing code.
+
 **Python components** (each is self-contained; use [uv](https://docs.astral.sh/uv/)):
 
 ```bash
@@ -91,6 +95,9 @@ your own.
 - Match the surrounding code's style. Run the linters/formatters before pushing
   (`npm run lint` / `npm run format` for Dashboard; keep Python idiomatic).
 - Update docs when behavior or config changes.
+- Run **`./health`** (or **`./health --quick`** for just the unit tests) before pushing — it
+  reproduces the full CI gate locally: all four Python suites, the Dashboard checks, the docs
+  build, and the repository invariants, exiting non-zero if anything fails.
 - Make sure CI is green — Dashboard checks and the Python matrix must pass.
 - Never include secrets or real scraped/personal data (real handles, content IDs,
   captions). Use synthetic fixtures.
