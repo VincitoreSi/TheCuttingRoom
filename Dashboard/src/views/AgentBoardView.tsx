@@ -2,21 +2,20 @@ import { useMemo, useState } from "react";
 import { useShell } from "../App";
 import { useAgentBoard, useContent, useProducers } from "../lib/hooks";
 import { humanizeAgent } from "../lib/agents";
-import { AgentConfigForm } from "../components/agent/AgentConfigForm";
 import { SecretsPanel } from "../components/agent/SecretsPanel";
 import { AgentIdentity } from "../components/agent/AgentIdentity";
 import { RunGroup } from "../components/agent/RunGroup";
 import { ReelModal } from "../components/ReelModal";
 import { Card, EmptyState, SectionHead } from "../components/ui";
 import { SeamStatus } from "../components/Seam";
-import { IconProducers } from "../components/icons";
+import { IconArrowRight, IconProducers } from "../components/icons";
 
 /** The per-agent desk: identity + tunable config/secrets up top, then this
     agent's runs as nested lane boards, live off the SSE `log` channel via
     useAgentBoard. Nav wiring (Sidebar/App/Dashboard strip) is Task 8 — this
     view just needs `name` and to compile/render standalone. */
 export function AgentBoardView({ name }: { name: string }) {
-  const { platform } = useShell();
+  const { platform, openAgentConfig } = useShell();
   const producersQ = useProducers();
   const producer = useMemo(
     () => (producersQ.data ?? []).find((p) => p.name === name),
@@ -66,7 +65,14 @@ export function AgentBoardView({ name }: { name: string }) {
       {producer ? (
         <Card className="p-0 producer">
           <AgentIdentity producer={producer} live={liveRuns.length > 0} />
-          {hasConfig && <AgentConfigForm agent={producer.name} />}
+          {/* Config lives in a modal in the Config section — this button navigates there. */}
+          {hasConfig && (
+            <div className="producer__foot">
+              <button className="producer__tab" onClick={() => openAgentConfig(producer.name)}>
+                Config <IconArrowRight size={13} />
+              </button>
+            </div>
+          )}
           <SecretsPanel producer={producer} />
         </Card>
       ) : producersQ.isLoading ? (

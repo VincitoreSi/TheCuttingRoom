@@ -2,8 +2,7 @@ import { useMemo, useState } from "react";
 import { useShell } from "../App";
 import { useAddReference, useProducers, useReferences, useStudio } from "../lib/hooks";
 import { Badge, Button, Card, EmptyState, Eyebrow, Input, SectionHead } from "../components/ui";
-import { IconChevron, IconProducers } from "../components/icons";
-import { AgentConfigForm } from "../components/agent/AgentConfigForm";
+import { IconArrowRight, IconProducers } from "../components/icons";
 import { SecretsPanel } from "../components/agent/SecretsPanel";
 import { agoFrom } from "../lib/format";
 import { useNow } from "../lib/hooks";
@@ -60,10 +59,12 @@ export function ProducersView() {
 }
 
 function ProducerCard({ producer: p }: { producer: Producer }) {
-  const { platform, openAgent } = useShell();
+  const { platform, openAgent, openAgentConfig } = useShell();
   const studioQ = useStudio(platform);
   const now = useNow(30_000);
-  const [panel, setPanel] = useState<null | "config" | "secrets">(null);
+  // Config now lives in a modal in the Config section (openAgentConfig navigates
+  // there); this card only toggles the inline Secrets panel.
+  const [secretsOpen, setSecretsOpen] = useState(false);
 
   const outputs = useMemo(
     () => (studioQ.data ?? []).filter((s) => s.agent === p.name).slice(0, 5),
@@ -119,20 +120,16 @@ function ProducerCard({ producer: p }: { producer: Producer }) {
         </div>
       )}
 
-      {/* config + secrets live inside the card */}
+      {/* config navigates to the Config section's modal; secrets stay inline */}
       <div className="producer__foot">
         {hasConfig && (
-          <button
-            className={cx("producer__tab", panel === "config" && "producer__tab--active")}
-            onClick={() => setPanel((v) => (v === "config" ? null : "config"))}
-          >
-            Config{" "}
-            <IconChevron size={13} className={cx("chev", panel === "config" && "chev--open")} />
+          <button className="producer__tab" onClick={() => openAgentConfig(p.name)}>
+            Config <IconArrowRight size={13} />
           </button>
         )}
         <button
-          className={cx("producer__tab", panel === "secrets" && "producer__tab--active")}
-          onClick={() => setPanel((v) => (v === "secrets" ? null : "secrets"))}
+          className={cx("producer__tab", secretsOpen && "producer__tab--active")}
+          onClick={() => setSecretsOpen((v) => !v)}
         >
           Secrets
           {(p.secrets?.length ?? 0) > 0 && (
@@ -141,8 +138,7 @@ function ProducerCard({ producer: p }: { producer: Producer }) {
         </button>
       </div>
 
-      {panel === "config" && hasConfig && <AgentConfigForm agent={p.name} />}
-      {panel === "secrets" && <SecretsPanel producer={p} />}
+      {secretsOpen && <SecretsPanel producer={p} />}
     </Card>
   );
 }
