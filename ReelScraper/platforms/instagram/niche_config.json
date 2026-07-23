@@ -32,6 +32,11 @@
       { "label": "Above Average", "min_score": 50 },
       { "label": "Normal", "min_score": 0 }
     ],
-    "top_n": 100
+    "top_n": 100,
+    "_comment_media_filter": "Which clips get their video downloaded AND sent to (paid) analysis. min_tier is a label from tiers above — only clips at or above that tier are selected. min_score is an optional numeric override of the tier's cutoff; max_downloads optionally caps how many are kept after the gate. Widen min_tier (e.g. 'High') to analyze more, tighten it (e.g. 'Viral') to spend less.",
+    "media_filter": {
+      "min_tier": "Viral",
+      "max_downloads": 60
+    }
   }
 }

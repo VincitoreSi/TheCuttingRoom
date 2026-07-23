@@ -29,6 +29,7 @@ from core.corpus import Corpus
 from core.logsetup import setup_logging
 from core.memory import SharedInsights
 from core.audio import collect_sounds
+from core.virality import resolve_media_filter
 
 PLATFORMS = ["instagram", "x", "youtube"]
 STUDIO_STATUSES = {"draft", "proposed", "approved", "rejected"}
@@ -1455,6 +1456,15 @@ def pending_analysis(platform, min_score: float | None = None, tier: str | None 
     else:
         rows = [r for r in all_rows if r.get("video_local") and r.get("content_id") not in have]
 
+    # Gate paid analysis by the SAME media_filter that gated the download: when the caller
+    # names no explicit score/tier, floor on the configured tier so a leftover Normal clip
+    # (downloaded under a looser earlier gate) is never sent to a PAID API. An explicit
+    # per-request min_score/tier still wins — the documented filters are unchanged.
+    if min_score is None and not tier:
+        gate_score, _ = resolve_media_filter(pdir(platform) / "niche_config.json")
+        if gate_score is not None:
+            min_score = gate_score
+
     if min_score is not None:
         rows = [r for r in rows if (r.get("virality_score") or 0) >= min_score]
     if tier:
@@ -2189,10 +2199,28 @@ STOP_GRACE_SEC = 20.0
 
 ANALYSIS_ENGINE_DIR = ROOT.parent / "AnalysisEngine"
 AUTO_SEARCH_DIR = ROOT.parent / "AutoSearch"
+
+
+def _media_stage_cmd(platform):
+    """The media download honours the platform's configured media gate.
+
+    The tier/min-score gate lives in niche_config.json (`virality.media_filter`); resolve it
+    to a score threshold HERE and forward it, so BOTH the manual media button and the
+    unattended cascade download only selected-tier clips instead of a hardcoded top-60 by
+    raw score. No media_filter = no flags = the pre-gate command, unchanged."""
+    argv = [PY, "download_media.py", platform]
+    min_score, max_downloads = resolve_media_filter(pdir(platform) / "niche_config.json")
+    if min_score is not None:
+        argv += ["--min-score", str(min_score)]
+    if max_downloads is not None:
+        argv += ["--top", str(int(max_downloads))]
+    return (argv, ROOT)
+
+
 STAGE_CMD = {
     "scrape":  lambda p: ([PY, "scrape.py", "--file", "pages.txt"], pdir(p)),
     "analyze": lambda p: ([PY, "run.py", "analyze"], pdir(p)),
-    "media":   lambda p: ([PY, "download_media.py", p], ROOT),
+    "media":   _media_stage_cmd,
     # AnalysisEngine is a sibling uv-managed project; shell out to its own CLI (built in 6.2).
     "analysis-engine": lambda p: (["uv", "run", "cli.py", "run", p], ANALYSIS_ENGINE_DIR),
     # AutoSearch (discovery, §11) — sibling uv-managed project. "auto-search" = manual/exhaustive

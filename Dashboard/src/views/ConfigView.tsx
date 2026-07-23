@@ -23,7 +23,8 @@ import {
 } from "../lib/cascadeFunnel";
 import type { CascadeField } from "../lib/cascadeFunnel";
 import { consumeConfigFocus } from "../lib/nav";
-import type { CascadeRow, NicheConfig, Tier } from "../lib/types";
+import type { CascadeRow, MediaFilter, NicheConfig, Tier } from "../lib/types";
+import { mediaGateMinScore, orderedTiers } from "../lib/mediaGate";
 import { cx } from "../lib/cx";
 
 const WEIGHT_LABELS: Record<string, string> = {
@@ -173,6 +174,20 @@ export function ConfigView() {
     setSaved(false);
   }
 
+  // The media gate lives in niche_config `virality.media_filter` and is written on the same
+  // "Save to hub" path as the weights/tiers. An emptied numeric box sends `undefined`, which
+  // JSON.stringify drops on save — so clearing an override is a real removal, not a 0.
+  function setMediaFilter(patch: Partial<MediaFilter>) {
+    setCfg((c) => {
+      if (!c) return c;
+      const next = structuredClone(c);
+      next.virality = next.virality ?? { weights: {}, tiers: [], top_n: 100 };
+      next.virality.media_filter = { ...(next.virality.media_filter ?? {}), ...patch };
+      return next;
+    });
+    setSaved(false);
+  }
+
   function removeKeyword(kw: string) {
     setCfg((c) => {
       if (!c?.discovery) return c;
@@ -233,6 +248,14 @@ export function ConfigView() {
     propose_pct: cascadeField("propose_pct"),
   });
   const blueprintsOn = cascadeRow?.include_blueprints ?? false;
+
+  // The media gate: the tiers (highest first) offered in the dropdown, the current filter,
+  // and the effective score floor the hub will apply — resolved with the SAME rule as the
+  // backend so the Eyebrow shows the real cutoff, not the label alone.
+  const tierList = cfg.virality?.tiers ?? [];
+  const tierOptions = orderedTiers(tierList);
+  const mediaFilter = cfg.virality?.media_filter;
+  const gateFloor = mediaGateMinScore(tierList, mediaFilter);
 
   return (
     <div className="flex flex-col gap-5 max-w-4xl">
@@ -332,6 +355,91 @@ export function ConfigView() {
                 </div>
               </div>
             ))}
+          </div>
+        </Card>
+      </motion.div>
+
+      {/* media gate — which tier gets its video downloaded AND (paid) analyzed */}
+      <motion.div {...sectionMotion(3, reduced)}>
+        <Card className="p-5">
+          <SectionHead
+            eyebrow="Media gate"
+            title="Which clips get downloaded — and analyzed"
+            right={
+              gateFloor != null ? (
+                <span className="sum-pill sum-pill--ok">score ≥ {gateFloor}</span>
+              ) : (
+                <span className="sum-pill sum-pill--off">no gate · all clips</span>
+              )
+            }
+          />
+          <p className="text-[13px] text-[var(--ink-dim)] mb-3">
+            Only clips at or above this tier have their video saved and sent to the{" "}
+            <strong>paid</strong> analysis stage — nothing below it is ever downloaded or
+            analyzed. Tightening this is the simplest way to spend less; widening it works more of
+            the corpus.
+          </p>
+          <div className="flex items-center gap-3 flex-wrap mb-3">
+            <label className="text-[13px] text-[var(--ink-dim)]" htmlFor="media-min-tier">
+              Minimum tier
+            </label>
+            <Select
+              id="media-min-tier"
+              value={mediaFilter?.min_tier ?? ""}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+                setMediaFilter({ min_tier: e.target.value || undefined })
+              }
+              aria-label="Minimum tier to download and analyze"
+            >
+              <option value="">All clips (no gate)</option>
+              {tierOptions.map((t: Tier) => (
+                <option key={t.label} value={t.label}>
+                  {t.label} · {t.min_score}+
+                </option>
+              ))}
+            </Select>
+          </div>
+
+          {/* advanced — a numeric override of the tier cutoff, and an optional cap. Both are
+              secondary to the tier dropdown above; empties clear back to "unset". */}
+          <div className="flex items-center gap-3 flex-wrap mb-2">
+            <label className="text-[13px] text-[var(--ink-dim)]" htmlFor="media-min-score">
+              Min score override
+            </label>
+            <Input
+              id="media-min-score"
+              type="number"
+              className="w-24"
+              min={0}
+              max={100}
+              value={mediaFilter?.min_score ?? ""}
+              aria-label="Minimum score override"
+              onChange={(e) =>
+                setMediaFilter({
+                  min_score: e.target.value === "" ? undefined : Number(e.target.value),
+                })
+              }
+            />
+            <Eyebrow>advanced · overrides the tier cutoff</Eyebrow>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="text-[13px] text-[var(--ink-dim)]" htmlFor="media-max-downloads">
+              Max downloads
+            </label>
+            <Input
+              id="media-max-downloads"
+              type="number"
+              className="w-24"
+              min={1}
+              value={mediaFilter?.max_downloads ?? ""}
+              aria-label="Maximum downloads per run"
+              onChange={(e) =>
+                setMediaFilter({
+                  max_downloads: e.target.value === "" ? undefined : Number(e.target.value),
+                })
+              }
+            />
+            <Eyebrow>optional cap after the gate</Eyebrow>
           </div>
         </Card>
       </motion.div>
