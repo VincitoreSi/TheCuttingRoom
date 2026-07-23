@@ -5,6 +5,7 @@ import {
   useAgentConfig,
   useAgents,
   useCandidates,
+  useLogStream,
   usePendingCandidates,
   useReducedMotion,
   useSaveAgentConfig,
@@ -12,12 +13,13 @@ import {
 } from "../lib/hooks";
 import { Badge, Button, Card, EmptyState, Eyebrow, SectionHead } from "../components/ui";
 import { TapeGauge } from "../components/gauges";
-import { IconCheck, IconDiscover, IconExternal, IconPin, IconX } from "../components/icons";
+import { IconCheck, IconDiscover, IconExternal, IconPin, IconSearch, IconX } from "../components/icons";
 import { compact } from "../lib/format";
 import { statusTone } from "../lib/statusTone";
 import { safeUrl } from "../lib/url";
 import { sectionMotion } from "../lib/motion";
 import { cx } from "../lib/cx";
+import { discoveryReadiness, lastDiscoveryRun } from "../lib/discoveryStatus";
 import type { Candidate } from "../lib/types";
 import type { ViewKey } from "../components/Sidebar";
 
@@ -73,6 +75,10 @@ export function DiscoveryView({ onNavigate }: { onNavigate?: (v: ViewKey) => voi
         }
       />
 
+      <LastRunStrip platform={platform} />
+
+      <ReadinessPanel />
+
       <CadencePanel onNavigate={onNavigate} />
 
       {/* the human gate is the point of this view, same pattern as Studio */}
@@ -126,6 +132,116 @@ export function DiscoveryView({ onNavigate }: { onNavigate?: (v: ViewKey) => voi
           </div>
         </Card>
       )}
+    </div>
+  );
+}
+
+/* "Last run" strip: the most recent auto-search run's outcome + reason, folded live off
+   the SSE `log` channel (the one subscription primitive, via useLogStream) by the pure
+   `lastDiscoveryRun` reducer. This is what turns a "0 proposed and no explanation" run into
+   "0 proposed — guest-only mode. Instagram search needs a burner session." Presentational
+   only — the fix lives on the auto-search config, not here. */
+function LastRunStrip({ platform }: { platform: string }) {
+  const { events } = useLogStream(300);
+  const last = useMemo(() => lastDiscoveryRun(events, platform), [events, platform]);
+
+  if (!last) {
+    return (
+      <Card className="p-3 last-run">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Eyebrow>Last run</Eyebrow>
+          <span className="text-[13px] text-[var(--ink-dim)]">
+            AutoSearch hasn't finished a discovery run yet — run Discover from the Board and its
+            outcome shows up here.
+          </span>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-3 last-run">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Eyebrow>Last run</Eyebrow>
+            <Badge tone={last.tone}>{last.headline}</Badge>
+          </div>
+          {last.detail && (
+            <p className="text-[13px] text-[var(--ink-dim)] mt-1 max-w-[72ch]">{last.detail}</p>
+          )}
+        </div>
+        {last.surface !== "unknown" && (
+          <Badge tone={last.surface === "burner" ? "sage" : "neutral"}>{last.surface}</Badge>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* Readiness indicator: guest-only vs burner + IG session status, read off the auto-search
+   agent config (guest_only) and its self-reported secret status (useAgents → secrets[]).
+   The load-bearing message: a BURNER SESSION with guest mode off is what enables search —
+   NOT Gemini, which is optional and only widens the search terms. No session-entry form
+   here; that was explicitly out of scope. */
+function ReadinessPanel() {
+  const cfg = useAgentConfig("auto-search").data?.config as Record<string, unknown> | undefined;
+  const agent = useAgents().data?.find((a) => a.name === "auto-search");
+  const ready = discoveryReadiness(cfg, agent?.secrets);
+
+  return (
+    <Card className="p-4 readiness">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <IconSearch
+            size={15}
+            className={ready.searchEnabled ? "text-[var(--sage)]" : "text-[var(--ink-dim)]"}
+          />
+          <Eyebrow>Search readiness</Eyebrow>
+          <Badge tone={ready.searchEnabled ? "sage" : "amber"}>
+            {ready.searchEnabled ? "Search enabled" : "Guest-only · no search"}
+          </Badge>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <ReadyPill
+            label="Mode"
+            value={ready.mode}
+            tone={ready.mode === "burner" ? "sage" : "neutral"}
+          />
+          <ReadyPill
+            label="IG session"
+            value={ready.igPresent ? "present" : "absent"}
+            tone={ready.igPresent ? "sage" : "danger"}
+          />
+          <ReadyPill
+            label="Gemini"
+            value={ready.geminiPresent ? "present · optional" : "absent · optional"}
+            tone="neutral"
+          />
+        </div>
+      </div>
+      <p className="text-[13px] text-[var(--ink-dim)] mt-2 max-w-[80ch]">
+        {ready.searchEnabled
+          ? "A burner session is loaded and guest mode is off, so AutoSearch can query Instagram's login-gated search surface."
+          : "Instagram search is login-gated. A burner session (IG_SESSIONID or AutoSearch/session.txt) WITH guest_only turned off is what enables search — this, not Gemini, is what lets discovery find creators. Gemini is optional and only widens the search terms."}
+      </p>
+    </Card>
+  );
+}
+
+function ReadyPill({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "sage" | "neutral" | "danger" | "amber";
+}) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="eyebrow">{label}</span>
+      <Badge tone={tone}>{value}</Badge>
     </div>
   );
 }

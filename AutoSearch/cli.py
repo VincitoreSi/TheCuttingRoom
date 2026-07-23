@@ -46,6 +46,16 @@ GUEST_ONLY_BANNER = (
     "discover/chaining) are SKIPPED. Discovery will be shallower."
 )
 
+# The ONE event that explains the whole symptom to an operator staring at a 0-candidate run:
+# guest-only means Instagram's search surface is never touched, so discovery is shallow/empty
+# BY DESIGN, and this names the exact fix. Posted first-class (its own log event, not buried
+# in a local logfile) before the term loop whenever we run without a burner session.
+NO_BURNER_REASON = (
+    "no burner session — Instagram search is login-gated; running guest-only so discovery "
+    "will be shallow/empty. Add IG_SESSIONID (or AutoSearch/session.txt) and set "
+    "guest_only=false to enable search."
+)
+
 WORKFLOW_STAGES = ["Queued", "Searching", "Scoring", "Proposed", "Approved", "Rejected"]
 
 # The tunable knobs (JSON Schema of defaults) — registered as the agent's config_schema so
@@ -254,7 +264,8 @@ def _seed_terms(niche: str, seed_keywords: list[str]) -> list[str]:
     return list(dict.fromkeys(seed_keywords))[:20] or [niche]
 
 
-def _expand_terms(cfg: dict, niche: str, seed_keywords: list[str], factors, trending) -> list[str]:
+def _expand_terms(cfg: dict, niche: str, seed_keywords: list[str], factors, trending,
+                  on_event=None) -> list[str]:
     """Widen the seed keywords with Gemini — OFF unless the operator asks for it.
 
     Two independent conditions, both required, in this order:
@@ -269,12 +280,18 @@ def _expand_terms(cfg: dict, niche: str, seed_keywords: list[str], factors, tren
     Every failure below falls back to the seeds rather than aborting the run: discovery with
     narrower terms is useful, discovery that dies because a model returned bad JSON is not.
     """
+    _emit = on_event or (lambda *a, **k: None)
     if not cfg.get("term_expansion_enabled", False):
         log.info("term expansion off (default) — searching seed keywords verbatim, no API cost")
+        _emit("expand.result", msg="term expansion off (default) — searching seed keywords "
+              "verbatim, no API cost", data={"outcome": "off", "expanded": False})
         return _seed_terms(niche, seed_keywords)
     if not _gemini_present():
         log.warning("term_expansion_enabled is true but no Gemini key resolved "
                     "(GEMINI_API_KEY / GEMINI_KEY / GOOGLE_API_KEY) — using seed keywords")
+        _emit("expand.result", level="warning", msg="term_expansion_enabled is true but no "
+              "Gemini key resolved — using seed keywords",
+              data={"outcome": "no_key", "expanded": False})
         return _seed_terms(niche, seed_keywords)
     try:
         from engine import gemini as geminilib
@@ -286,14 +303,21 @@ def _expand_terms(cfg: dict, niche: str, seed_keywords: list[str], factors, tren
         errs = schemalib.validate_keyword_expansion(doc)
         if errs:
             log.warning("term expansion failed schema validation; using seeds", extra={"errors": errs})
+            _emit("expand.result", level="warning", msg="term expansion failed schema "
+                  "validation; using seeds", data={"outcome": "bad_schema", "expanded": False})
             return _seed_terms(niche, seed_keywords)
         terms = list(dict.fromkeys((doc.get("keywords") or []) + (doc.get("hashtags") or [])))
         log.info("term expansion ok", extra={"seeds": len(seed_keywords), "expanded": len(terms)})
+        _emit("expand.result", msg=f"term expansion ok — {len(seed_keywords)} seeds -> "
+              f"{len(terms)} terms", data={"outcome": "ok", "expanded": True,
+              "seeds": len(seed_keywords), "terms": len(terms)})
         return terms or _seed_terms(niche, seed_keywords)
     except CircuitTripped:
         raise
     except Exception as e:
         log.warning("term expansion call failed; using seeds", extra={"err": str(e)})
+        _emit("expand.result", level="warning", msg="term expansion call failed; using seeds",
+              data={"outcome": "error", "expanded": False})
         return _seed_terms(niche, seed_keywords)
 
 
@@ -322,6 +346,47 @@ def _make_on_candidate(hub: HubClient, run_id: str, platform: str, posted_box: l
     return on_candidate
 
 
+def _make_on_event(hub: HubClient, run_id: str, platform: str):
+    """Sibling to `_make_on_candidate`: turns search.py's injected per-query emitter into
+    `POST /api/logs` events, and tallies the run totals off the authoritative (unthrottled)
+    `query.result` rows so cmd_run/cmd_beat can stamp them onto `run.end`.
+
+    Returns `(on_event, counts)`. `counts` accretes {terms_run, raw_found, hydrated, dropped}
+    as events flow. The emitter mirrors scrape.py's `emit_throttled` for the `hydrate.progress`
+    heartbeat: a `throttle` (seconds) caps that verb to one post per interval per event —
+    kept small and local here rather than importing the scraper's HubEvents."""
+    counts = {"terms_run": 0, "raw_found": 0, "hydrated": 0, "dropped": 0}
+    last: dict[str, float] = {}
+
+    def on_event(event: str, *, level: str = "info", content_id: str | None = None,
+                 msg: str | None = None, data: dict | None = None,
+                 throttle: float | None = None) -> None:
+        if event == "query.result" and data:
+            counts["terms_run"] += 1
+            counts["raw_found"] += int(data.get("found") or 0)
+            counts["hydrated"] += int(data.get("hydrated") or 0)
+            counts["dropped"] += int(data.get("dropped") or 0)
+        if throttle is not None:
+            now = time.monotonic()
+            prev = last.get(event)
+            if prev is not None and now - prev < throttle:
+                return
+            last[event] = now
+        hub.post_log(AGENT_NAME, event, level=level, run_id=run_id, platform=platform,
+                     content_id=content_id, msg=msg, data=data)
+
+    return on_event, counts
+
+
+def _terminal_reason(*, proposed: int, raw_found: int, burner_present: bool) -> str:
+    """The one-word verdict `run.end` carries and the Dashboard's 'last run' strip reads."""
+    if proposed:
+        return "ok"
+    if not burner_present and raw_found == 0:
+        return "guest_only_no_search"
+    return "no_candidates_passed_gates"
+
+
 # ---- commands -----------------------------------------------------------------------
 def cmd_run(args) -> int:
     platform = args.platform
@@ -334,29 +399,50 @@ def cmd_run(args) -> int:
               "Enable it in the Dashboard/config to run discovery.")
         return 0
 
-    hub.post_log(AGENT_NAME, "run.start", run_id=run_id, platform=platform, msg=f"run {platform}")
+    posted_box = [0]
+    on_candidate = _make_on_candidate(hub, run_id, platform, posted_box)
+    on_event, counts = _make_on_event(hub, run_id, platform)
 
+    # Everything the PLAN needs is settled BEFORE run.start so the very first event already
+    # says what this run will (and won't) do — most importantly the surface.
     niche, seed_keywords = _load_niche(hub, platform)
     factors = _safe(lambda: hub.factors(platform))
     trending = _prior_trending_insight(hub)
-    terms = _expand_terms(cfg, niche, seed_keywords, factors, trending)
+    burner = None if cfg.get("guest_only", True) else ig.load_burner_session()
+    terms = _expand_terms(cfg, niche, seed_keywords, factors, trending, on_event=on_event)
+
+    surface = "burner" if burner else "guest-only"
+    hub.post_log(AGENT_NAME, "run.start", run_id=run_id, platform=platform, msg=f"run {platform}",
+                 data={"mode": "run", "surface": surface,
+                       "term_expansion": bool(cfg.get("term_expansion_enabled", False)),
+                       "terms": len(terms), "per_term_limit": int(cfg.get("per_term_limit", 5)),
+                       "min_followers": int(cfg.get("min_followers", 2000))})
+
+    # The single event that explains a shallow/empty run to an operator. Posted BEFORE the
+    # term loop so it precedes the string of "found 0" results it accounts for.
+    if burner is None:
+        hub.post_log(AGENT_NAME, "run.reason", run_id=run_id, platform=platform,
+                     msg=NO_BURNER_REASON, data={"reason": "no_burner_session",
+                                                 "surface": "guest-only"})
 
     guest = ig.GuestSession()
     try:
         guest.bootstrap()
     except Exception as e:
         log.error("guest bootstrap failed", extra={"err": str(e)})
-    burner = None if cfg.get("guest_only", True) else ig.load_burner_session()
+        hub.post_log(AGENT_NAME, "run.reason", level="warning", run_id=run_id, platform=platform,
+                     msg="guest bootstrap failed — hydration may be unavailable this run",
+                     data={"reason": "guest_bootstrap_failed"})
     _print_safety_banner(bool(burner))
 
     breaker = CircuitBreaker(max_strikes=3, pace_seconds=float(cfg.get("pacing_seconds", 6.0)))
     budget = searchlib.Budget(cfg)
-    posted_box = [0]
-    on_candidate = _make_on_candidate(hub, run_id, platform, posted_box)
 
+    candidates: list[dict] = []
     try:
-        searchlib.discover_via_terms(terms, cfg, platform, guest, burner, breaker, budget,
-                                     on_candidate=on_candidate)
+        candidates = searchlib.discover_via_terms(terms, cfg, platform, guest, burner, breaker,
+                                                  budget, on_candidate=on_candidate,
+                                                  on_event=on_event)
     except CircuitTripped as e:
         log.critical("circuit breaker tripped — stopping cleanly", extra={"err": str(e)})
         hub.post_log(AGENT_NAME, "run.error", level="error", run_id=run_id, platform=platform, msg=str(e))
@@ -375,8 +461,12 @@ def cmd_run(args) -> int:
         except HubError:
             pass
 
+    reason = _terminal_reason(proposed=posted, raw_found=counts["raw_found"],
+                              burner_present=burner is not None)
     hub.post_log(AGENT_NAME, "run.end", run_id=run_id, platform=platform, msg=f"proposed {posted}",
-                 data={"proposed": posted})
+                 data={"proposed": posted, "terms_run": counts["terms_run"],
+                       "raw_found": counts["raw_found"], "hydrated": counts["hydrated"],
+                       "passed_gates": len(candidates), "reason": reason})
     print(f"\nDone: {posted} candidate(s) proposed for {platform}.\n")
     return 0
 
@@ -398,30 +488,47 @@ def cmd_beat(args) -> int:
         print(f"beat.skip reason={reason} platform={platform}")
         return 0
 
-    hub.post_log(AGENT_NAME, "run.start", run_id=run_id, platform=platform,
-                 msg=f"beat {platform}", data={"mode": "beat"})
+    posted_box = [0]
+    on_candidate = _make_on_candidate(hub, run_id, platform, posted_box)
+    on_event, counts = _make_on_event(hub, run_id, platform)
 
     niche, seed_keywords = _load_niche(hub, platform)
     beat_max_units = int(cfg.get("beat_max_units", 2))
     terms = (seed_keywords or [niche])[:beat_max_units]  # cheap: never an LLM call on a beat
+    burner = None if cfg.get("guest_only", True) else ig.load_burner_session()
+
+    surface = "burner" if burner else "guest-only"
+    hub.post_log(AGENT_NAME, "run.start", run_id=run_id, platform=platform,
+                 msg=f"beat {platform}",
+                 data={"mode": "beat", "surface": surface,
+                       "term_expansion": bool(cfg.get("term_expansion_enabled", False)),
+                       "terms": len(terms), "per_term_limit": int(cfg.get("per_term_limit", 5)),
+                       "min_followers": int(cfg.get("min_followers", 2000))})
+
+    if burner is None:
+        hub.post_log(AGENT_NAME, "run.reason", run_id=run_id, platform=platform,
+                     msg=NO_BURNER_REASON, data={"reason": "no_burner_session",
+                                                 "surface": "guest-only"})
 
     guest = ig.GuestSession()
     try:
         guest.bootstrap()
     except Exception as e:
         log.error("guest bootstrap failed", extra={"err": str(e)})
-    burner = None if cfg.get("guest_only", True) else ig.load_burner_session()
+        hub.post_log(AGENT_NAME, "run.reason", level="warning", run_id=run_id, platform=platform,
+                     msg="guest bootstrap failed — hydration may be unavailable this beat",
+                     data={"reason": "guest_bootstrap_failed"})
 
     breaker = CircuitBreaker(max_strikes=3, pace_seconds=float(cfg.get("pacing_seconds", 6.0)))
     budget = searchlib.Budget(cfg)
-    posted_box = [0]
-    on_candidate = _make_on_candidate(hub, run_id, platform, posted_box)
 
     date_str = datetime.now().date().isoformat()
     tripped = False
+    candidates: list[dict] = []
     try:
-        searchlib.discover_via_terms(terms, cfg, platform, guest, burner, breaker, budget,
-                                     max_units=beat_max_units, on_candidate=on_candidate)
+        candidates = searchlib.discover_via_terms(terms, cfg, platform, guest, burner, breaker,
+                                                  budget, max_units=beat_max_units,
+                                                  on_candidate=on_candidate, on_event=on_event)
     except CircuitTripped as e:
         tripped = True
         log.critical("circuit breaker tripped during beat", extra={"err": str(e)})
@@ -435,8 +542,12 @@ def cmd_beat(args) -> int:
 
     planlib.increment_ledger(date_str, n=len(terms))
     posted = posted_box[0]
+    reason = _terminal_reason(proposed=posted, raw_found=counts["raw_found"],
+                              burner_present=burner is not None)
     hub.post_log(AGENT_NAME, "run.end", run_id=run_id, platform=platform, msg=f"beat proposed {posted}",
-                 data={"proposed": posted, "tripped": tripped})
+                 data={"proposed": posted, "tripped": tripped, "terms_run": counts["terms_run"],
+                       "raw_found": counts["raw_found"], "hydrated": counts["hydrated"],
+                       "passed_gates": len(candidates), "reason": reason})
     print(f"beat.done proposed={posted} platform={platform}")
     return 0
 
