@@ -162,6 +162,11 @@ export const api = {
   secretsStatus: (agent: string) =>
     fetchJson<SecretStatus[]>(`/api/config/agent/${agent}/secrets/status`),
 
+  registerAgent: (name: string) =>
+    fetchJson<{ ok: boolean; name: string }>(`/api/agents/${encodeURIComponent(name)}/register`, {
+      method: "POST",
+    }),
+
   // Discovery candidates (§11) — the human gate on AutoSearch's finds.
   getCandidates: (p: string, status?: string) =>
     fetchJson<Candidate[]>(

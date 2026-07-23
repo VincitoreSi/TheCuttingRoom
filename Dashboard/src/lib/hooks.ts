@@ -294,6 +294,18 @@ export function useSaveAgentConfig(agent: string) {
   });
 }
 
+export function useRegisterAgent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.registerAgent(name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["agents"] });
+      qc.invalidateQueries({ queryKey: ["producers"] });
+    },
+    onError: (e) => toastForError("Could not register agent", e),
+  });
+}
+
 /** Register a reference/template URL, then refresh the reference list. */
 export function useAddReference(p: string) {
   const qc = useQueryClient();

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useAgentConfig, useAgents, useSaveAgentConfig } from "../../lib/hooks";
+import { useAgentConfig, useAgents, useRegisterAgent, useSaveAgentConfig } from "../../lib/hooks";
 import { useShell } from "../../App";
 import { Badge, Button, Card, EmptyState, Eyebrow, Input, SectionHead, Select } from "../ui";
 import { IconCheck, IconConfig, IconProducers } from "../icons";
@@ -81,16 +81,20 @@ export function KeysAndModels() {
 
 function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
   const { configAgent, clearConfigAgent } = useShell();
-  /* An unregistered agent has no stored config to fetch — asking would 404. Its KEYS are
-     still knowable (the hub reads the agent's .env directly), which is the whole point. */
-  const cfgQ = useAgentConfig(p.registered ? p.name : null);
+  /* The hub returns config_schema for built-in agents even before registration
+     (from KNOWN_AGENT_MANIFESTS), so we always fetch. For unknown/custom agents
+     without a known manifest the endpoint returns null schema, same as before. */
+  const cfgQ = useAgentConfig(p.name);
   const save = useSaveAgentConfig(p.name);
+  const registerAgent = useRegisterAgent();
   // Full merged config (defaults <- stored), matching AgentConfigForm's PUT
   // semantics: we persist the whole map, only ever mutating a model field.
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [saved, setSaved] = useState(false);
   // Which agent's full-config modal is open (this row's name, or null).
   const [openFor, setOpenFor] = useState<string | null>(null);
+  // Which agent's register dialog is shown (this row's name, or null).
+  const [registerTarget, setRegisterTarget] = useState<string | null>(null);
 
   useEffect(() => {
     if (cfgQ.data) setValues({ ...cfgQ.data.defaults, ...cfgQ.data.config });
@@ -130,20 +134,54 @@ function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
             <IconCheck size={12} /> saved
           </span>
         )}
-        {/* Full-config editor lives in a modal — the button opens it here. An
-            unregistered agent has no stored config to fetch, so it is disabled
-            until the agent runs (mirrors the model column's !registered copy). */}
+        {/* Full-config editor lives in a modal. For unregistered agents the button
+            opens a register dialog that lets the user register first, then configure. */}
         <Button
           variant="ghost"
           size="sm"
           style={{ marginLeft: "auto" }}
-          onClick={() => setOpenFor(p.name)}
-          disabled={!p.registered}
-          title={p.registered ? undefined : "available once it runs"}
+          onClick={() => (p.registered ? setOpenFor(p.name) : setRegisterTarget(p.name))}
           aria-label={`Configure ${p.name}`}
         >
           <IconConfig size={14} /> Configure
         </Button>
+        {registerTarget === p.name && (
+          <div
+            className="modal-scrim fixed inset-0 z-50 flex items-center justify-center"
+            onClick={() => setRegisterTarget(null)}
+          >
+            <div
+              className="p-6 rounded-lg shadow-xl max-w-sm w-full"
+              style={{
+                background: "var(--surface)",
+                border: "1px solid var(--line-strong)",
+                borderRadius: "var(--r-lg)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="font-display text-lg mb-2">{humanizeAgent(p.name)}</h3>
+              <p className="text-sm mb-4" style={{ color: "var(--ink-2)" }}>
+                This agent hasn't registered yet. Register it now to adjust its settings before the
+                first run.
+              </p>
+              <div className="flex gap-2 justify-end">
+                <Button variant="ghost" size="sm" onClick={() => setRegisterTarget(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    await registerAgent.mutateAsync(p.name);
+                    setRegisterTarget(null);
+                    setOpenFor(p.name);
+                  }}
+                >
+                  Register {"\u0026"} Configure
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="km-agent__grid">
@@ -164,7 +202,7 @@ function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
         {/* -------- Model / provider selectors (editable) -------- */}
         <div className="km-col">
           <Eyebrow className="mb-2">Model</Eyebrow>
-          {!p.registered ? (
+          {!cfgQ.data?.config_schema ? (
             <span className="eyebrow">
               Known once this agent runs — it publishes its model options to the hub the first time
               it starts.

@@ -42,17 +42,25 @@ describe("reasonMessage", () => {
 describe("lastDiscoveryRun", () => {
   it("returns null before any run has ended", () => {
     expect(lastDiscoveryRun([], "instagram")).toBeNull();
-    expect(
-      lastDiscoveryRun([ev({ event: "run.start", ts: 1 })], "instagram"),
-    ).toBeNull();
+    expect(lastDiscoveryRun([ev({ event: "run.start", ts: 1 })], "instagram")).toBeNull();
   });
 
   it("picks the newest run.end for the platform and reads its reason + counts", () => {
     const events: LogEvent[] = [
-      ev({ event: "run.end", ts: 10, run_id: "r1", platform: "instagram",
-           data: { proposed: 0, reason: "guest_only_no_search" } }),
-      ev({ event: "run.end", ts: 20, run_id: "r2", platform: "instagram",
-           data: { proposed: 2, reason: "ok" } }),
+      ev({
+        event: "run.end",
+        ts: 10,
+        run_id: "r1",
+        platform: "instagram",
+        data: { proposed: 0, reason: "guest_only_no_search" },
+      }),
+      ev({
+        event: "run.end",
+        ts: 20,
+        run_id: "r2",
+        platform: "instagram",
+        data: { proposed: 2, reason: "ok" },
+      }),
     ];
     const s = lastDiscoveryRun(events, "instagram");
     expect(s?.runId).toBe("r2");
@@ -63,12 +71,21 @@ describe("lastDiscoveryRun", () => {
 
   it("ignores run.end from other platforms and other agents", () => {
     const events: LogEvent[] = [
-      ev({ event: "run.end", ts: 30, platform: "youtube",
-           data: { proposed: 5, reason: "ok" } }),
-      ev({ agent: "scrape", event: "run.end", ts: 40, platform: "instagram",
-           data: { proposed: 9, reason: "ok" } }),
-      ev({ event: "run.end", ts: 5, run_id: "r0", platform: "instagram",
-           data: { proposed: 0, reason: "guest_only_no_search" } }),
+      ev({ event: "run.end", ts: 30, platform: "youtube", data: { proposed: 5, reason: "ok" } }),
+      ev({
+        agent: "scrape",
+        event: "run.end",
+        ts: 40,
+        platform: "instagram",
+        data: { proposed: 9, reason: "ok" },
+      }),
+      ev({
+        event: "run.end",
+        ts: 5,
+        run_id: "r0",
+        platform: "instagram",
+        data: { proposed: 0, reason: "guest_only_no_search" },
+      }),
     ];
     const s = lastDiscoveryRun(events, "instagram");
     expect(s?.runId).toBe("r0");
@@ -77,10 +94,20 @@ describe("lastDiscoveryRun", () => {
 
   it("pulls the surface off the matching run.start", () => {
     const events: LogEvent[] = [
-      ev({ event: "run.start", ts: 1, run_id: "r1", platform: "instagram",
-           data: { surface: "guest-only" } }),
-      ev({ event: "run.end", ts: 2, run_id: "r1", platform: "instagram",
-           data: { proposed: 0, reason: "guest_only_no_search" } }),
+      ev({
+        event: "run.start",
+        ts: 1,
+        run_id: "r1",
+        platform: "instagram",
+        data: { surface: "guest-only" },
+      }),
+      ev({
+        event: "run.end",
+        ts: 2,
+        run_id: "r1",
+        platform: "instagram",
+        data: { proposed: 0, reason: "guest_only_no_search" },
+      }),
     ];
     expect(lastDiscoveryRun(events, "instagram")?.surface).toBe("guest-only");
   });
@@ -88,10 +115,16 @@ describe("lastDiscoveryRun", () => {
 
 describe("discoveryReadiness", () => {
   const ig = (present: boolean): SecretStatus => ({
-    name: "ig_sessionid", env_var: "IG_SESSIONID", required: false, present,
+    name: "ig_sessionid",
+    env_var: "IG_SESSIONID",
+    required: false,
+    present,
   });
   const gem = (present: boolean): SecretStatus => ({
-    name: "gemini_api_key", env_var: "GEMINI_API_KEY", required: false, present,
+    name: "gemini_api_key",
+    env_var: "GEMINI_API_KEY",
+    required: false,
+    present,
   });
 
   it("defaults to guest-only with no config and no secrets", () => {

@@ -330,6 +330,7 @@ The registry is the pluggability backbone: any agent can self-register and immed
 | `GET /api/producers` | Full roster of **registered** producers; the Dashboard renders lanes directly from this list. |
 | `GET /api/producers/{name}` | One producer's manifest. |
 | `GET /api/agents` | Every agent this checkout knows about, **registered or not**, with live secret presence. |
+| `POST /api/agents/{name}/register` | Register a built-in agent by name using its known manifest — allows the Dashboard to register an agent before its first CLI run. See below. |
 
 !!! note "`present` is recomputed per request, not replayed"
     A manifest's `secrets[].present` is what the agent self-reported when it last registered.
@@ -346,8 +347,7 @@ The registry is the pluggability backbone: any agent can self-register and immed
 wrong question for *"is my key set up"*. Registration is lazy — an agent registers inside its
 hub-connect preamble, which only runs when its CLI runs — so on a clean clone the roster is
 empty and there is nothing to say about the key that gates the Blueprint stage. This endpoint
-always carries the built-in agents, with `registered` telling you whether the rest of the
-manifest (`config_schema`, `workflow_stages`) is actually known:
+always carries the built-in agents, with `registered` telling you whether the agent has ever run:
 
 ```json title="GET /api/agents"
 [
@@ -366,6 +366,32 @@ manifest (`config_schema`, `workflow_stages`) is actually known:
 deliberate: discovery degrades to keyword-only search without a key and the hub marks that
 stage unconditionally ready, so a required flag there would demand a paid key for a stage that
 never needed one.
+
+!!! tip "`config_schema` for unregistered built-in agents"
+    Although the agent list itself leaves `config_schema` empty for unregistered agents,
+    `GET /api/config/agent/{name}` returns the schema from `KNOWN_AGENT_MANIFESTS` for any
+    built-in agent — always. This is what lets the Dashboard's **Keys & models** section render
+    the model form (and its defaults) even on a fresh install where no agent has ever run.
+
+### Manual registration: `POST /api/agents/{name}/register`
+
+Because registration is normally lazy (triggered by an agent's first CLI run), a clean Docker
+install shows all three built-in agents with a "not started yet" badge and a `disabled`
+Configure button in the old UI. The **Keys & models** panel in the Config section now offers
+a register dialog: clicking Configure on an unregistered built-in agent opens a dialog, and
+"Register & Configure" calls this endpoint to register the agent from its known manifest, then
+opens the config modal:
+
+```json title="POST /api/agents/analysis-engine/register → 200"
+{ "ok": true, "name": "analysis-engine" }
+```
+
+The endpoint reads the agent's manifest from `KNOWN_AGENT_MANIFESTS` (not from a running agent's
+self-report), evaluates secret presence live via `_secret_present`, and calls the same
+`register_producer` that the ordinary `POST /api/producers/register` path uses. It is
+**idempotent**: re-registering updates the manifest with live secret status.
+
+Returns **404** for a name not in `KNOWN_AGENT_MANIFESTS`.
 
 ```json title="POST /api/producers/register — ProducerManifest"
 {

@@ -1585,6 +1585,229 @@ KNOWN_AGENT_SECRETS = {
 }
 
 
+KNOWN_AGENT_MANIFESTS: dict[str, dict] = {
+    # Each entry mirrors what the agent's own `_manifest()` / `manifest` would POST to
+    # /api/producers/register, minus `present` on secrets (computed live at registration time).
+    # See the agent source for rationale on individual fields.
+    "analysis-engine": {
+        "name": "analysis-engine",
+        "kind": "analyzer",
+        "consumes": ["analysis_queue", "reference_queue", "media", "corpus", "insights"],
+        "human_gate": False,
+        "needs_reference": False,
+        "produces": "analysis_blueprint",
+        "output_status": None,
+        "workflow_stages": ["Queued", "Analyzing", "Self-eval", "Done"],
+        "config_schema": {
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "default": "gemini-2.5-pro"},
+                "judge_model": {"type": "string", "default": "gemini-2.5-pro"},
+                "score_threshold": {"type": "integer", "default": 85},
+                "max_refine_passes": {"type": "integer", "default": 3},
+                "max_repair_passes": {"type": "integer", "default": 2},
+                "temperature": {"type": "number", "default": 0.4},
+                "max_output_tokens": {"type": "integer", "default": 64000},
+                "default_limit": {"type": "integer", "default": 10},
+                "max_duration_s": {
+                    "type": "number", "default": 30.0,
+                    "description": "Skip clips longer than this many seconds (0 = no limit). "
+                                   "Mirrors SimilarContent's EASE_LONG_S: a clip at or over it "
+                                   "can never score as easy to remake, so a blueprint for one "
+                                   "is spend that the ease gate will never use.",
+                },
+            },
+        },
+        "secrets": [
+            {"name": "gemini_api_key", "env_var": "GEMINI_API_KEY", "required": True},
+        ],
+    },
+    "auto-search": {
+        "name": "auto-search",
+        "kind": "discovery",
+        "consumes": ["config", "corpus", "insights"],
+        "human_gate": True,
+        "needs_reference": False,
+        "produces": "creator_candidates",
+        "output_status": "pending",
+        "workflow_stages": ["Queued", "Searching", "Scoring", "Proposed", "Approved", "Rejected"],
+        "config_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "weekly_search_budget": {
+                    "type": "integer", "default": 120, "minimum": 1,
+                    "description": "Work units (search terms+expands) per 7-day window",
+                },
+                "active_days_per_week": {
+                    "type": "integer", "default": 5, "minimum": 1, "maximum": 7,
+                    "description": "Active days/week; the rest are randomized rest days",
+                },
+                "active_hours": {
+                    "type": "array", "default": [9, 23],
+                    "description": "[startHour,endHour] local window beats may act in",
+                },
+                "heartbeat_minutes": {
+                    "type": "integer", "default": 20, "minimum": 1,
+                    "description": "Scheduler tick cadence",
+                },
+                "beat_action_probability": {
+                    "type": "number", "default": 0.35, "minimum": 0, "maximum": 1,
+                    "description": "Chance an in-window beat does work",
+                },
+                "beat_max_units": {
+                    "type": "integer", "default": 2, "minimum": 1,
+                    "description": "Max work units per beat",
+                },
+                "daily_search_cap": {
+                    "type": "integer", "default": 300, "minimum": 1,
+                    "description": "Hard ceiling: IG requests/day",
+                },
+                "per_term_limit": {
+                    "type": "integer", "default": 5, "minimum": 1,
+                    "description": "Candidates hydrated+scored per term",
+                },
+                "min_followers": {"type": "integer", "default": 2000, "minimum": 0},
+                "min_median_plays": {"type": "integer", "default": 3000, "minimum": 0},
+                "relevance_threshold": {
+                    "type": "number", "default": 0.6, "minimum": 0, "maximum": 1,
+                },
+                "pacing_seconds": {
+                    "type": "number", "default": 6.0, "minimum": 0,
+                    "description": "Min gap between paced actions (floors in §1 win)",
+                },
+                "guest_only": {
+                    "type": "boolean", "default": True,
+                    "description": "true = never use the burner; guest surfaces only",
+                },
+                "discovery_enabled": {
+                    "type": "boolean", "default": False,
+                    "description": "Kill-switch. false = agent + hub scheduler idle",
+                },
+                "term_expansion_enabled": {
+                    "type": "boolean", "default": False,
+                    "description": "Spend Gemini credits to widen seed keywords into more "
+                                   "search terms. false (default) = keyword search only, zero "
+                                   "API cost. Needs GEMINI_API_KEY when enabled.",
+                },
+                "model": {
+                    "type": "string", "default": "gemini-2.5-flash",
+                    "description": "Gemini model for term expansion (only used when "
+                                   "term_expansion_enabled is true)",
+                },
+            },
+        },
+        "secrets": [
+            {"name": "gemini_api_key", "env_var": "GEMINI_API_KEY", "required": False},
+            {"name": "ig_sessionid", "env_var": "IG_SESSIONID", "required": False},
+        ],
+    },
+    "similar-content": {
+        "name": "similar-content",
+        "kind": "clone",
+        "consumes": ["corpus", "analysis", "audio", "insights"],
+        "human_gate": False,
+        "needs_reference": False,
+        "produces": "studio_markdown",
+        "output_status": "proposed",
+        "workflow_stages": ["Queued", "Generating", "Self-eval", "Proposed", "Approved",
+                            "Rendering", "Rendered", "Rejected"],
+        "renderable": True,
+        "dir": "SimilarContent",
+        "render_cmd": ["uv", "run", "cli.py", "render"],
+        "proposes": True,
+        "propose_cmd": ["uv", "run", "cli.py"],
+        "config_schema": {
+            "type": "object",
+            "title": "similar-content knobs",
+            "properties": {
+                "image_provider": {
+                    "type": "string",
+                    "default": "nano_banana",
+                    "enum": ["nvidia_nim", "nano_banana", "pollinations", "huggingface"],
+                    "description": "Active image backend (mirrors image_config.json `active`).",
+                },
+                "smoke_test_provider": {
+                    "type": "string", "default": "pollinations",
+                    "description": "Keyless provider used for a free smoke render before spending credits.",
+                },
+                "top_n": {
+                    "type": "integer", "default": 5, "minimum": 1, "maximum": 25,
+                    "description": "How many clone recipes `cli.py propose` publishes per run (the default for --count).",
+                },
+                "prefer_blueprint": {
+                    "type": "boolean", "default": True,
+                    "description": "If a schema_version:2 blueprint exists for the exemplar's content_id, use it as source of truth instead of re-deriving beats.",
+                },
+                "ease_threshold": {
+                    "type": "integer", "default": 55, "minimum": 0, "maximum": 100,
+                    "description": "Ease gate 0-100 (higher = easier to remake). Candidates scoring at or above this rank easy-first; the rest can only appear as backfill. A ~10s, 6-7 shot, fully-static reel scores ~51-52, a 2-shot 7s static clip ~70. A clip whose duration is unknown, or 30s or longer, is never 'easy' at any setting — shots + static alone total 65, so without that rule a 90s single-take would outrank every real candidate. If a run reports 0 of N cleared, lower this to the score it names.",
+                },
+                "ease_restore_to": {
+                    "type": "integer", "default": None, "minimum": 0, "maximum": 100,
+                    "description": "Where a lowered ease_threshold came from, so it can be put back (blank = nothing to restore). Recorded once, when the threshold is below the default and nothing is recorded yet, and cleared only by a restore that actually happened — a value you set here is never rewritten by a run. Automation may only ever RAISE the threshold to this value — lowering is a human act, because a wrong restore is visible (fewer easy picks) while a wrong lowering silently degrades every proposal.",
+                },
+                "ease_auto_restore": {
+                    "type": "boolean", "default": False,
+                    "description": "When more than `top_n` candidates in the pool clear `ease_restore_to`, put ease_threshold back to it automatically. Off by default: the run reports that the corpus now supports the original threshold and changes nothing, so the first move is always yours. Even on, it only ever acts on a full scheduled run — never on one narrowed by --count/--top/--topic, and never in the same run that first recorded the target — and it abandons the write if ease_threshold changed in the hub while the run was scoring.",
+                },
+                "backfill_order": {
+                    "type": "string", "default": "virality", "enum": ["virality", "ease"],
+                    "description": "How the remainder is ordered when too few candidates clear the ease gate. virality = the proven winners first (default). ease = the least-bad-to-remake first, when production cost matters more than the score.",
+                },
+                "fidelity_score_threshold": {
+                    "type": "integer", "default": 85, "minimum": 0, "maximum": 100,
+                    "description": "Self-eval gate: clone fidelity to the blueprint must meet this before publish (§10.2).",
+                },
+                "reuse_public_audio_only": {
+                    "type": "boolean", "default": True,
+                    "description": "Only reuse public/reusable original audio; otherwise substitute the nearest public equivalent and flag it.",
+                },
+                "aspect_ratio": {
+                    "type": "string", "default": "9:16", "enum": ["9:16", "4:5", "1:1"],
+                    "description": "Output canvas. 9:16 (1080x1920) is the reels/shorts/tiktok format and the only one that fills a phone full-bleed — keep it unless you are deliberately producing feed content. 4:5 = 1080x1350 (IG feed portrait), 1:1 = 1080x1080.",
+                },
+                "video_fit": {
+                    "type": "string", "default": "auto", "enum": ["auto", "cover", "contain"],
+                    "description": "How a generated frame meets the canvas. auto = crop when the frame is within 10% of the canvas aspect (Nano Banana's 768x1344 is 1.6% off, so no bars), letterbox when it is further out (its square 1024x1024 fallback would lose 44% of the width and cut the hook text). cover = always crop. contain = always letterbox. None of them ever stretch.",
+                },
+                "render_steps": {
+                    "type": "integer", "default": 30, "minimum": 10, "maximum": 50,
+                    "description": "Diffusion steps. FLUX / NVIDIA-NIM ONLY — ignored by nano_banana, which is a text-to-image LLM with no step count.",
+                },
+                "render_seed": {
+                    "type": "integer", "default": 0,
+                    "description": "Fixed seed for subject continuity. FLUX / NVIDIA-NIM ONLY — nano_banana has no seed; it holds continuity by anchoring every frame to the first generated image instead.",
+                },
+                "max_frames_per_clone": {"type": "integer", "default": 12, "minimum": 1, "maximum": 40},
+                "caption_model": {
+                    "type": "string", "default": "gemini-2.5-flash",
+                    "description": "Text model that writes the Instagram caption at render time.",
+                },
+                "caption_temperature": {
+                    "type": "number", "default": 0.8, "minimum": 0, "maximum": 2,
+                },
+                "video_fps": {"type": "integer", "default": 30, "minimum": 12, "maximum": 60},
+                "frame_min_hold_s": {
+                    "type": "number", "default": 0.6, "minimum": 0.1,
+                    "description": "Shortest a single frame may be held when fitting shots to the source duration.",
+                },
+                "image_retries": {"type": "integer", "default": 3, "minimum": 1, "maximum": 6},
+                "pace_seconds": {
+                    "type": "number", "default": 2.0, "minimum": 0,
+                    "description": "Minimum gap between image-API calls (rate-limit courtesy).",
+                },
+            },
+        },
+        "secrets": [
+            {"name": "image_provider_key", "env_var": "GEMINI_API_KEY", "required": True},
+            {"name": "image_provider_key_nvidia_nim", "env_var": "NVIDIA_API_KEY", "required": False},
+            {"name": "image_provider_key_huggingface", "env_var": "HF_TOKEN", "required": False},
+        ],
+    },
+}
+
+
 @app.get("/api/agents")
 def list_agents():
     """Every agent this checkout knows about, registered or not, with live secret presence.
@@ -1616,6 +1839,27 @@ def list_agents():
                         for s in KNOWN_AGENT_SECRETS.get(agent, [])],
         })
     return out
+
+
+@app.post("/api/agents/{name}/register")
+def manual_register_agent(name: str):
+    """Register a built-in agent by name using KNOWN_AGENT_MANIFESTS.
+    Returns 404 if the agent is not in KNOWN_AGENT_MANIFESTS.
+    Idempotent: re-registering updates the manifest with live secret status."""
+    known = KNOWN_AGENT_MANIFESTS.get(name)
+    if not known:
+        raise HTTPException(404, f"no known manifest for agent {name!r}")
+    # Compute live secret presence at registration time (the stored flag is a snapshot,
+    # _manifest_with_live_secrets will OR it with a live check on read).
+    agent_dir = _agent_env_dir(name, known)
+    live_manifest = dict(known)
+    live_manifest["secrets"] = [
+        {"name": s.get("name"), "env_var": s.get("env_var"),
+         "required": s.get("required", True),
+         "present": bool(_secret_present(s.get("env_var"), agent_dir))}
+        for s in (known.get("secrets") or [])
+    ]
+    return register_producer(ProducerManifest(**live_manifest))
 
 
 @app.get("/api/producers/{name}")
@@ -2125,7 +2369,8 @@ def get_agent_config(agent):
     """The agent's stored config, layered over defaults read from its manifest
     `config_schema` (so a freshly-registered agent is configurable immediately)."""
     reg = _read_json(PRODUCERS_FILE, {})
-    schema = (reg.get(agent) or {}).get("config_schema")
+    manifest = reg.get(agent) or KNOWN_AGENT_MANIFESTS.get(agent, {})
+    schema = manifest.get("config_schema")
     defaults = _config_defaults_from_schema(schema)
     stored = _read_json(ROOT / "config" / "agents" / f"{agent}.json", {})
     return {"agent": agent, "config": {**defaults, **stored},

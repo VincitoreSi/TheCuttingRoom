@@ -85,7 +85,7 @@ Every `v*` tag publishes a multi-arch image (`linux/amd64` + `linux/arm64`) to t
 Container Registry — ~190 MB compressed. It is public: no `docker login`, no account.
 
 ```bash
-docker run --rm -p 8787:8787 ghcr.io/vincitoresi/thecuttingroom:latest
+docker run --rm -p 8787:8787 -e GEMINI_API_KEY="your-gemini-key" ghcr.io/vincitoresi/thecuttingroom:latest
 # then open http://127.0.0.1:8787
 ```
 
@@ -219,6 +219,12 @@ cd SimilarContent && uv run cli.py propose --platform instagram --dry-run
 Config → **Automatic runs** repeats scrape → analyze → media on a timer (daily, weekly, …)
 for as long as the hub is running. Blueprint generation is opt-in there because it spends
 API credits on every run.
+
+Config → **Keys & models** shows every agent's API-key status and model selection in one place.
+On a fresh install all three built-in agents appear with "not started yet" badges. Click
+**Configure** to open a registration dialog — register an agent from its known manifest and
+adjust its model/provider settings before its first run, instead of waiting for the CLI to
+auto-register.
 
 `--port N` pins a port and `--no-launch` sets up without starting anything. When you're
 done: `./stop` shuts down everything this checkout started (and nothing belonging to

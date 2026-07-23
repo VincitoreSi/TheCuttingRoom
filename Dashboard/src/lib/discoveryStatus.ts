@@ -132,9 +132,7 @@ export function discoveryReadiness(
   secrets: AgentRosterEntry["secrets"] | undefined,
 ): DiscoveryReadiness {
   const guestOnly = (cfg?.guest_only ?? true) !== false; // default true (see cli CONFIG_SCHEMA)
-  const igPresent = (secrets ?? []).some(
-    (s) => s.env_var === "IG_SESSIONID" && s.present === true,
-  );
+  const igPresent = (secrets ?? []).some((s) => s.env_var === "IG_SESSIONID" && s.present === true);
   const geminiPresent = (secrets ?? []).some(
     (s) => s.env_var === "GEMINI_API_KEY" && s.present === true,
   );
