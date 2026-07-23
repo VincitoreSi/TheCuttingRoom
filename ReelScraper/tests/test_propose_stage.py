@@ -171,16 +171,22 @@ def test_a_producer_that_does_not_declare_proposes_is_refused(hub, launched):
     assert launched == []
 
 
-def test_propose_is_refused_when_no_producer_offers_it_or_when_two_do(hub, launched):
-    """Zero or several is refused rather than guessed: the cascade fires this unattended,
-    and an unattended trigger that picks an agent at random is not a feature."""
+def test_propose_is_refused_when_none_can_be_resolved_or_when_two_do(hub, launched):
+    """Several is refused rather than guessed: the cascade fires this unattended, and an
+    unattended trigger that picks an agent at random is not a feature. And when NOTHING can
+    be resolved — no registered proposer AND the built-in similar-content producer is not a
+    reachable sibling directory — the refusal is honest and up front (readiness surfaces it),
+    never a ready:true that 409s on the click. Auto-heal (a separate test) only applies when
+    that built-in dir DOES resolve; here it does not (SimilarContent is not a sibling of the
+    test's tmp ROOT), so the zero case still refuses."""
     (hub.root / "producers").mkdir(parents=True, exist_ok=True)
     (hub.root / "producers" / "registry.json").write_text("{}", encoding="utf-8")
     _corpus(hub)
 
     none = hub.post("/api/pipeline/instagram/propose")
     assert none.status_code == 409
-    assert "no registered producer" in none.json()["detail"]
+    assert "proposes" in none.json()["detail"]
+    assert launched == []
 
     (hub.root / "producers" / "registry.json").write_text(json.dumps({
         "similar-content": {"name": "similar-content", "dir": "SimilarContent",
@@ -207,16 +213,83 @@ def test_propose_is_not_part_of_the_full_pipeline_run_or_the_free_scheduled_stag
 
 
 def test_propose_readiness_names_the_stage_that_unblocks_it(hub):
-    """Readiness keys on the CORPUS, not on blueprints: the producer treats blueprints as
-    optional enrichment and only fails outright on an empty corpus. Keying this on
-    blueprints would grey out a perfectly runnable manual Propose."""
+    """The corpus is the FIRST precondition, and blueprints are not: the producer treats
+    blueprints as optional enrichment and only fails outright on an empty corpus. An empty
+    corpus points at Analyze — the one-click fix — not at the missing proposer below it."""
     blocked = hub.mod.stage_readiness("instagram")["propose"]
     assert blocked["ready"] is False
     assert blocked["blocked_by"] == "analyze"
     assert "Analyze" in blocked["reason"]
 
+
+def test_propose_readiness_is_not_ready_without_a_resolvable_proposer(hub):
+    """Honest readiness: a corpus is necessary but NOT sufficient. When no producer declares
+    proposes:true AND the built-in similar-content producer cannot be resolved to a sibling
+    dir, propose is not-ready with a clear reason — the fix for the old ready:true-then-409,
+    where the button looked live and only revealed the missing proposer after the click."""
+    _corpus(hub)
+    prop = hub.mod.stage_readiness("instagram")["propose"]
+    assert prop["ready"] is False
+    assert "proposes" in prop["reason"]
+
+
+def test_propose_readiness_is_ready_once_a_proposer_is_registered(hub, proposer):
+    """A corpus plus exactly one registered proposer is the ready state."""
     _corpus(hub)
     assert hub.mod.stage_readiness("instagram")["propose"]["ready"] is True
+
+
+def test_propose_readiness_is_ready_when_the_builtin_can_autoheal(hub, monkeypatch):
+    """Even with no registered proposer, readiness is ready:true when the built-in
+    similar-content producer's dir resolves — the launch will auto-start it, so the button
+    must not be greyed. Readiness and the launch path share one verdict (`_proposer_status`
+    and `_propose_stage_cmd` both read `_builtin_proposer_dir`) so the button cannot lie."""
+    _corpus(hub)
+    monkeypatch.setattr(hub.mod, "_builtin_proposer_dir", lambda: hub.root)
+    assert hub.mod.stage_readiness("instagram")["propose"]["ready"] is True
+
+
+def test_propose_autoheals_to_the_builtin_producer_when_none_is_registered(
+        hub, monkeypatch, launched):
+    """THE bug this fix closes. On a fresh clone nobody has run similar-content, so no
+    producer declares proposes:true and the propose button 409'd forever — a chicken-and-egg,
+    since similar-content self-registers ONLY when its own CLI runs, and its CLI only runs
+    when propose launches it. Auto-heal resolves the built-in producer from AGENT_DIRS and
+    starts it directly; its bootstrap() self-registers it on first run. The command it
+    launches is the hub-owned default (`uv run cli.py propose`), never anything from a
+    manifest — so the paid-verb hole and the argv allowlist are untouched."""
+    _corpus(hub)
+    (hub.root / "producers" / "registry.json").write_text("{}", encoding="utf-8")
+    # SimilarContent is not a sibling of tmp ROOT; stand in for the containment-checked
+    # resolution the real _builtin_proposer_dir performs against AGENT_DIRS.
+    monkeypatch.setattr(hub.mod, "_builtin_proposer_dir", lambda: hub.root)
+
+    r = hub.post("/api/pipeline/instagram/propose")
+
+    assert r.status_code == 200, r.text
+    _, cmd, cwd = launched[0]
+    assert cmd == ["uv", "run", "cli.py", "propose", "--platform", "instagram"]
+    assert cwd == str(hub.root)
+
+
+def test_autoheal_is_not_used_when_two_producers_declare_proposes(hub, monkeypatch, launched):
+    """A resolvable built-in dir must NEVER let the hub paper over a genuine ambiguity. When
+    two producers declare proposes:true the run is refused, even though the built-in could be
+    started — auto-heal is only for the zero-proposer case."""
+    _corpus(hub)
+    (hub.root / "producers" / "registry.json").write_text(json.dumps({
+        "similar-content": {"name": "similar-content", "dir": "SimilarContent",
+                            "proposes": True},
+        "proposal-content": {"name": "proposal-content", "dir": "ProposalContent",
+                             "proposes": True}}), encoding="utf-8")
+    monkeypatch.setattr(hub.mod, "_builtin_proposer_dir", lambda: hub.root)
+
+    r = hub.post("/api/pipeline/instagram/propose")
+
+    assert r.status_code == 409
+    assert "similar-content" in r.json()["detail"]
+    assert "proposal-content" in r.json()["detail"]
+    assert launched == []
 
 
 def test_propose_can_still_be_launched_with_no_blueprints_on_disk(

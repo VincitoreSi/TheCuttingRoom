@@ -615,6 +615,15 @@ AGENT_DIRS = {
     "similar-content": "SimilarContent",
 }
 
+# The producer the hub falls back to when NOBODY has registered as a proposer yet. On a
+# fresh clone no producer has ever run, so producers/registry.json has no proposes:true
+# entry and the propose button used to 409 forever — a chicken-and-egg, since
+# similar-content self-registers ONLY when its own CLI runs, and its CLI only runs when
+# propose launches it. Auto-heal (see `_propose_stage_cmd`) closes the loop by resolving
+# this producer from AGENT_DIRS and starting it; its bootstrap() self-registers it on first
+# run, so the next launch takes the ordinary registered path.
+BUILTIN_PROPOSER = "similar-content"
+
 
 def _env_file_declares(path, names) -> bool:
     """Does this .env assign any of `names` a non-empty value? PRESENCE ONLY.
@@ -715,6 +724,49 @@ def _media_count(platform) -> int:
     return sum(1 for f in d.glob("*.mp4") if not f.name.startswith("ref_"))
 
 
+def _builtin_proposer_dir():
+    """The built-in proposer's sibling directory, or None when it cannot be resolved.
+
+    Keyed on AGENT_DIRS rather than a registered manifest — the whole point of auto-heal is
+    that the producer has NOT registered yet, so `_producer_dir` (which requires the manifest
+    to declare the capability) cannot answer. The sibling-containment rule is copied from
+    `_producer_dir` VERBATIM: a direct child of this repo's parent, no traversal, must exist.
+    The COMMAND is still shape-checked by `_validate_render_cmd` at the launch site, so the
+    security model (allowlisted launcher, contained working dir) is exactly the render one."""
+    known = AGENT_DIRS.get(BUILTIN_PROPOSER)
+    if not known:
+        return None
+    d = (ROOT.parent / known).resolve()
+    if d.parent != ROOT.parent.resolve() or not d.is_dir():
+        return None
+    return d
+
+
+def _proposer_status():
+    """Can `propose` be launched right now, and if not, why? Returns `(ok, reason)`.
+
+    ONE verdict shared by `stage_readiness` (so the button is greyed with the real reason up
+    front) and by the launch path (so the button can never say ready and then 409). Exactly
+    one registered proposer is the clean case. Several is a genuine ambiguity the hub refuses
+    to guess through — auto-heal must not paper over it. None is fine IFF the built-in
+    similar-content producer can be auto-started (`_builtin_proposer_dir`)."""
+    reg = _read_json(PRODUCERS_FILE, {})
+    proposers = sorted(n for n, m in reg.items()
+                       if isinstance(m, dict) and m.get("proposes")) \
+        if isinstance(reg, dict) else []
+    if len(proposers) == 1:
+        return True, ""
+    if len(proposers) > 1:
+        return False, ("several producers declare proposes:true "
+                       f"({', '.join(proposers)}) — the hub will not guess which one to run. "
+                       "Stop all but one proposing producer.")
+    if _builtin_proposer_dir() is not None:
+        return True, ""
+    return False, ("no registered producer declares proposes:true and the built-in "
+                   "similar-content producer could not be found — start a producer once so "
+                   "it registers.")
+
+
 def stage_readiness(platform):
     """Can each stage do anything useful right now, and if not, what unblocks it?
 
@@ -760,12 +812,21 @@ def stage_readiness(platform):
     else:
         out["analysis-engine"] = st(True)
     # propose reads the SCORED CORPUS; blueprints are optional enrichment that the producer
-    # logs about and continues without. The only thing that makes it fail outright is an
-    # empty corpus. The CASCADE's trigger for propose counts blueprints — a different
-    # question ("is there new work for it?") from the one this answers ("can it run at
-    # all?"), and conflating them would grey out a perfectly runnable manual Propose.
-    out["propose"] = st(has_corpus, "analyze",
-                        "" if has_corpus else "No scored corpus yet — run Analyze first.")
+    # logs about and continues without. The corpus is the FIRST precondition and points at
+    # Analyze — the one-click fix. The CASCADE's trigger for propose counts blueprints — a
+    # different question ("is there new work for it?") from the one this answers ("can it run
+    # at all?"), and conflating them would grey out a perfectly runnable manual Propose.
+    #
+    # But a corpus is necessary, not sufficient: propose also needs a PRODUCER to run it.
+    # Reporting ready:true off the corpus alone is how the button came to advertise itself as
+    # live and then 409 the instant it was clicked (no proposes:true producer registered, and
+    # none auto-startable). `_proposer_status` gives the same verdict the launch path reaches,
+    # so readiness and the click agree.
+    if not has_corpus:
+        out["propose"] = st(False, "analyze", "No scored corpus yet — run Analyze first.")
+    else:
+        prop_ok, prop_reason = _proposer_status()
+        out["propose"] = st(True) if prop_ok else st(False, None, prop_reason)
     # Discovery is opt-in and never part of the core run; it has no corpus precondition.
     out["auto-search"] = st(True)
     return out
@@ -2255,8 +2316,28 @@ def _propose_stage_cmd(platform, agent=None):
     subcommand could declare ["uv", "run", "cli.py", "render"] and reach a PAID command
     through the free, unattended trigger this feature promises costs nothing.
     `POST /api/producers/register` needs no auth, so "free by construction" has to mean
-    construction, not the producer's honesty."""
-    agent = agent or _propose_agent()
+    construction, not the producer's honesty.
+
+    AUTO-HEAL: when NO producer has registered as a proposer yet, fall back to the built-in
+    similar-content producer resolved from AGENT_DIRS and launch its propose. Its bootstrap()
+    self-registers it on first run, so the next launch takes the registered path below and
+    this fallback stops firing. The fallback reuses the SAME sibling-dir containment
+    (`_builtin_proposer_dir`) and the SAME argv allowlist (`_validate_render_cmd`) as the
+    registered path, and the command it runs is the hub-owned default — never anything from a
+    manifest — so nothing about the unauthenticated-register threat model changes. "Several
+    producers declare proposes" is deliberately NOT auto-healed: that ambiguity is still
+    refused by `_propose_agent`, because a proposer registered EXISTS to be resolved, it just
+    can't be chosen unattended."""
+    if agent is None:
+        reg = _read_json(PRODUCERS_FILE, {})
+        has_proposer = isinstance(reg, dict) and any(
+            isinstance(m, dict) and m.get("proposes") for m in reg.values())
+        if not has_proposer:
+            heal = _builtin_proposer_dir()
+            if heal is not None:
+                argv = _validate_render_cmd(BUILTIN_PROPOSER, ["uv", "run", "cli.py"])
+                return (argv + ["propose", "--platform", platform], heal)
+        agent = _propose_agent()
     m = _read_json(PRODUCERS_FILE, {}).get(agent) or {}
     argv = [str(x) for x in (m.get("propose_cmd") or ["uv", "run", "cli.py"])]
     if argv and argv[-1] == "propose":
