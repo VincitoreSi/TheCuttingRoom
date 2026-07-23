@@ -18,8 +18,11 @@ import { sectionMotion } from "../lib/motion";
 import {
   CASCADE_LIMITS,
   FUNNEL_ROWS,
+  REELS_PER_CREATOR,
   clampCascadeField,
   funnelProjection,
+  reelsPerCreator,
+  withReelsPerCreator,
 } from "../lib/cascadeFunnel";
 import type { CascadeField } from "../lib/cascadeFunnel";
 import { consumeConfigFocus } from "../lib/nav";
@@ -101,6 +104,14 @@ export function ConfigView() {
   const [newKeyword, setNewKeyword] = useState("");
   const [newPage, setNewPage] = useState("");
   const [saved, setSaved] = useState(false);
+
+  // The Scrape row edits niche_config.reels_per_creator — the real per-creator scrape size,
+  // what the scraper actually used. Like the cascade drafts, the box holds a local string
+  // while it is being typed and hands back to the config value on commit/blur, so it never
+  // snaps back for the length of the PUT round trip. Reset on a platform switch, where a
+  // draft would both misreport and mis-save the wrong platform.
+  const [reelsDraft, setReelsDraft] = useState<string | null>(null);
+  useEffect(() => setReelsDraft(null), [platform]);
 
   // Pages are server-authoritative (pinning/removing persists immediately, below), so keep
   // the local list in sync with every config refetch. The scoring `cfg`, by contrast, is
@@ -221,12 +232,34 @@ export function ConfigView() {
     setTimeout(() => setSaved(false), 2400);
   }
 
+  // The Scrape row's live value: the in-flight draft while it is being typed, the config's
+  // reels_per_creator otherwise (100 when the field is absent — scrape.py's own default, NOT
+  // the cascade's 250 batch fallback). Anchors the funnel below.
+  const reelsValue = reelsPerCreator(cfg?.reels_per_creator);
+  const reelsText = reelsDraft ?? String(reelsValue);
+
+  // Commit one Scrape-row edit, write-through. reels_per_creator lives in niche_config.json,
+  // which the hub overwrites wholesale on PUT — so base the payload on the SERVER's config
+  // (not the locally-edited `cfg`, whose unsaved weight edits belong to "Save to hub") with
+  // only reels_per_creator replaced. Local `cfg` is updated too so the row and a later
+  // "Save to hub" stay consistent; the config refetch does not reseed `cfg` (cfgSeeded).
+  function commitReels(raw: string) {
+    setReelsDraft(null);
+    if (raw.trim() === "") return; // emptied box — hand it back to the config value
+    const n = reelsPerCreator(raw);
+    if (n === reelsValue) return;
+    setCfg((c) => (c ? { ...structuredClone(c), reels_per_creator: n } : c));
+    save.mutate({ config: withReelsPerCreator(configQ.data?.config ?? {}, n) });
+  }
+
   const sumOk = Math.abs(weightSum - 1) < 0.001;
 
   // Projected off the LIVE values (drafts included), so the volumes move under the thumb
   // while a slider is being dragged and settle on what the hub took.
   const projected = funnelProjection({
-    scrape_count: cascadeField("scrape_count"),
+    // Anchor the funnel on the REAL per-creator scrape size (reels_per_creator), not the
+    // cascade's scrape_count — that 250 is a batch default the scraper never used.
+    scrape_count: reelsValue,
     analyze_pct: cascadeField("analyze_pct"),
     media_pct: cascadeField("media_pct"),
     blueprint_pct: cascadeField("blueprint_pct"),
@@ -450,17 +483,15 @@ export function ConfigView() {
                       <Input
                         type="number"
                         className="w-24"
-                        value={cascadeText("scrape_count")}
-                        min={CASCADE_LIMITS.scrape_count.min}
-                        max={CASCADE_LIMITS.scrape_count.max}
-                        aria-label="Reels scraped per cycle"
-                        onChange={(e) =>
-                          setCascadeDrafts((p) => ({ ...p, scrape_count: e.target.value }))
-                        }
-                        onBlur={(e) => commitCascade("scrape_count", e.target.value)}
+                        value={reelsText}
+                        min={REELS_PER_CREATOR.min}
+                        max={REELS_PER_CREATOR.max}
+                        aria-label="Reels scraped per creator"
+                        onChange={(e) => setReelsDraft(e.target.value)}
+                        onBlur={(e) => commitReels(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
                       />
-                      <Eyebrow>per cycle</Eyebrow>
+                      <Eyebrow>per creator</Eyebrow>
                     </span>
                   ) : (
                     <RangeSlider
