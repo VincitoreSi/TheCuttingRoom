@@ -4,10 +4,14 @@ download_media.py — persist reel/short videos + thumbnails locally so the fron
 play them inline (Instagram/YouTube CDN links expire within hours; metrics are permanent).
 
 Reads platforms/<platform>/content.json (written by `run.py analyze`) and downloads the
-top-N by virality_score into media/<platform>/<content_id>.mp4 (+ .jpg thumbnail).
+selected clips into media/<platform>/<content_id>.mp4 (+ .jpg thumbnail). Selection is a
+tier/score GATE applied BEFORE the cap, so only content a user actually cares about is
+downloaded (and, downstream, sent to PAID analysis) — never the top-N by raw score.
 Skips files already present. Polite, sequential, with a short delay.
 
-  python download_media.py instagram            # top 60 (default)
+  python download_media.py instagram                    # gate from niche_config, else top 60
+  python download_media.py instagram --min-tier Viral   # only Viral, then cap
+  python download_media.py instagram --min-score 70      # explicit score floor
   python download_media.py instagram --top 150
 """
 import sys, json, time, argparse, logging, urllib.request
@@ -15,6 +19,7 @@ from pathlib import Path
 
 from core.atomicio import atomic_path
 from core.logsetup import setup_logging
+from core.virality import load_config, tier_threshold
 
 ROOT = Path(__file__).parent
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/149.0 Safari/537.36"
@@ -40,10 +45,27 @@ def _get(url, dest):
             f.write(r.read())
 
 
+def select_rows(rows, min_score=None, top=60):
+    """The gate: keep scored rows meeting `min_score`, sort by score, THEN slice to `top`.
+
+    Filtering BEFORE the cap is the whole point — the old code sliced the top-N by score with
+    no floor, so excluding a tier would still be topped back up to the cap with the very
+    clips it meant to exclude. `min_score` None = no floor (the pre-gate behaviour)."""
+    rows = [r for r in rows if r.get("virality_score") is not None]
+    if min_score is not None:
+        rows = [r for r in rows if r["virality_score"] >= min_score]
+    rows = sorted(rows, key=lambda r: -r["virality_score"])
+    return rows[:top]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("platform")
     ap.add_argument("--top", type=int, default=60)
+    ap.add_argument("--min-score", type=float, default=None,
+                    help="only download clips scoring >= this (overrides --min-tier)")
+    ap.add_argument("--min-tier", default=None,
+                    help="only download clips at or above this tier label (from niche_config)")
     args = ap.parse_args()
     setup_logging("media", platform=args.platform)
 
@@ -51,10 +73,18 @@ def main():
     if not cj.exists():
         log.error("no content.json — run analyze first", extra={"platform": args.platform})
         sys.exit(1)
+
+    # Resolve the gate: an explicit --min-score wins; otherwise a --min-tier label is mapped
+    # to a score through THIS platform's tiers, so labels/thresholds match the scoring engine.
+    min_score = args.min_score
+    if min_score is None and args.min_tier:
+        _, tiers, _ = load_config(ROOT / "platforms" / args.platform / "niche_config.json")
+        min_score = tier_threshold(tiers, args.min_tier)
+        if min_score is None:
+            log.warning("unknown --min-tier, ignoring", extra={"tier": args.min_tier})
+
     rows = json.loads(cj.read_text(encoding="utf-8"))
-    rows = [r for r in rows if r.get("virality_score") is not None]
-    rows.sort(key=lambda r: -r["virality_score"])
-    rows = rows[:args.top]
+    rows = select_rows(rows, min_score=min_score, top=args.top)
 
     out = ROOT / "media" / args.platform
     out.mkdir(parents=True, exist_ok=True)

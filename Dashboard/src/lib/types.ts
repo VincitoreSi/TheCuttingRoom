@@ -113,10 +113,22 @@ export interface Tier {
   min_score: number;
 }
 
+/** The media gate (niche_config `virality.media_filter`): which clips get their video
+    downloaded AND sent to the PAID analysis stage. `min_tier` is a label from `tiers`; only
+    clips at or above it are selected. `min_score` is an optional numeric override of the
+    tier's cutoff; `max_downloads` optionally caps how many are kept after the gate. Absent =
+    no gate (the pre-gate top-N-by-score behaviour). */
+export interface MediaFilter {
+  min_tier?: string;
+  min_score?: number;
+  max_downloads?: number;
+}
+
 export interface ViralityConfig {
   weights: Record<string, number>;
   tiers: Tier[];
   top_n: number;
+  media_filter?: MediaFilter;
 }
 
 export interface Discovery {

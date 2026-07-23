@@ -43,6 +43,40 @@ def load_config(path):
     return weights, tiers, int(v.get("top_n") or 100)
 
 
+def tier_threshold(tiers, label):
+    """The min_score a `label` demands, read from a tiers list (as `load_config` returns it),
+    or None if the label is not one of the configured tiers. Keeping this here means the media
+    gate and the scoring engine read the SAME labels/thresholds — they cannot drift apart."""
+    for t in tiers or []:
+        if t.get("label") == label:
+            return t.get("min_score", 0)
+    return None
+
+
+def resolve_media_filter(path):
+    """Resolve `virality.media_filter` in a platform's niche_config into an effective
+    (min_score, max_downloads) the media stage can act on.
+
+    `min_tier` (a label) maps to a score threshold via the SAME tiers `load_config` returns,
+    so a user picking "Viral" gets exactly the scoring engine's Viral cutoff. An explicit
+    `min_score` overrides the tier-derived one. No `media_filter` (or an unknown tier label)
+    resolves to no gate — (None, None) — so nothing changes until a user opts in."""
+    cfg = {}
+    try:
+        cfg = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    mf = ((cfg.get("virality") or {}).get("media_filter")) or {}
+    _, tiers, _ = load_config(path)
+    min_score = None
+    if mf.get("min_tier"):
+        min_score = tier_threshold(tiers, mf["min_tier"])
+    if mf.get("min_score") is not None:
+        min_score = mf["min_score"]
+    max_downloads = mf.get("max_downloads")
+    return min_score, max_downloads
+
+
 def _pct_ranker(values):
     s = sorted(v for v in values if v is not None)
     n = len(s)
