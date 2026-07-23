@@ -2,20 +2,13 @@
   "niche": "Fashion",
   "reels_per_creator": 100,
 
-  "_comment_discovery": "Auto-discovery of MORE pages in this niche. OFF by default — the default run only analyzes the handpicked links in pages.txt. Search + seed-expand require a burner sessionid in session.txt (Instagram gates search behind login); guest mode alone cannot search. Tweak keywords/seeds/limits here, or just tell Claude what niche to target and it will rewrite this block.",
+  "_comment_discovery": "Seed keywords for auto-discovery of MORE creators in this niche. The live discovery agent is AutoSearch (../AutoSearch), reached through the hub's Discover stage; it reads ONLY discovery.keywords from here — every other knob (caps, min_followers, guest_only, the discovery_enabled kill-switch, optional Gemini term-expansion) lives on the auto-search agent config (GET/PUT /api/config/agent/auto-search, editable from the Dashboard). Instagram gates search behind login, so a burner sessionid (IG_SESSIONID or AutoSearch/session.txt) with guest_only=false is what actually enables search; guest-only discovery is shallow/empty by design. Just tell Claude what niche to target and it will rewrite these keywords.",
   "discovery": {
-    "enabled": false,
     "keywords": [
       "fashion", "outfit", "ootd", "style", "styling", "streetwear",
       "fashion blogger", "lookbook", "wardrobe", "thrift haul", "grwm",
       "fashion designer", "fit check", "aesthetic outfits", "capsule wardrobe"
-    ],
-    "seeds": [],
-    "search_terms": 6,
-    "per_query": 50,
-    "max_candidates": 0,
-    "min_followers": 5000,
-    "expand_related": true
+    ]
   },
 
   "_comment_virality": "How 'viral' is scored. Each reel gets 4 signals, each normalized to a 0-1 percentile across the whole dataset, then blended by these weights into a 0-100 virality_score. Adjust weights to bias what 'viral' means for you (weights are auto-normalized to sum to 1).",
