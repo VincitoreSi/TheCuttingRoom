@@ -21,8 +21,9 @@ platforms:
     # Max reels pulled per creator (maps to niche_config "reels_per_creator").
     reels_per_creator: 100
 
-    # Discovery is Instagram-only and OFF by default. `keywords` drive keyword search;
-    # `seeds` drive seed-expansion (related profiles). Both feed AutoSearch / discover.py.
+    # Discovery is Instagram-only and OFF by default. `keywords` drive AutoSearch's keyword
+    # search (which needs a burner IG session — guest mode cannot search). AutoSearch reads
+    # only `keywords` from this block.
     discovery:
       keywords:
         - fashion
@@ -40,7 +41,6 @@ platforms:
         - fit check
         - aesthetic outfits
         - capsule wardrobe
-      seeds: []
 
     # Virality signal weights (auto-normalized to sum to 1 by the engine). Fashion is
     # reach-led — small accounts breaking out on reach/outlier is the signal we chase.
