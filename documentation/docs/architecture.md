@@ -101,7 +101,7 @@ flowchart LR
 | 2. Sources | `pages.txt` (human-curated or auto-search-approved) | the handle/link list a scrape run consumes |
 | 3. Scrape | `platforms/<p>/scrape.py` | raw per-post JSON → `content.json` after normalize (metrics, captions, media URLs — CDN links expire in hours) |
 | 4. Analyze / score | `run.py analyze` + `core/virality.py` | the 4-signal engine (`engagement_rate`, `reach_multiplier`, `outlier_score`, `velocity`), percentile-normalized and blended into a `virality_score` (0-100) + tier; xlsx/CSV reports; indexed memory |
-| 5. Media | `download_media.py` | top-viral clips persisted to `media/<p>/<content_id>.mp4` (+ `.jpg`) for inline board playback and for AnalysisEngine to watch |
+| 5. Media | `download_media.py` | tier-gated top clips persisted to `media/<p>/<content_id>.mp4` (+ `.jpg`) for inline board playback and for AnalysisEngine to watch. Selection is a tier/score **gate**, not a raw top-N: `niche_config.json`'s `virality.media_filter` (`min_tier`, optional `min_score`, optional `max_downloads`) is resolved by `core/virality.resolve_media_filter` into `--min-score`/`--top` flags. The SAME resolved gate also floors the paid Blueprint queue (stage 6) |
 | 6. Blueprint | AnalysisEngine | schema_version-2 blueprint via `POST /api/analysis/{p}`: `video_metadata`, `global_style`, `audio`, `audio_strategy`, `characters_and_subjects[]`, `text_overlays[]`, `shots[]` (each with `generation_prompt`/`negative_prompt`), `regeneration_guide`, `virality_formula`, `evaluation` |
 | 7. Propose | the one producer declaring `proposes: true` (SimilarContent today) | ranks the corpus by how cheap each winner is to remake (`score_ease`), joins each pick to its blueprint, and writes a recipe. Launchable as a stage (`POST /api/pipeline/{p}/propose`) and the last boundary the [cascade](api-reference.md#the-cascade) fires unattended. Free — it reads blueprints and writes markdown |
 | 8. Studio | `POST /api/studio/{p}` + the gate | markdown proposals (mandatory `## Audio` block), gated by human approve/reject before posting. Approved items become renderable |
@@ -139,7 +139,7 @@ logs/                       per-invocation logs (git-ignored); agents.jsonl = ce
 api/app.py                  the hub itself (REST + SSE + media + serves frontend build)
 cli.py                      single entry point: start | scrape | analyze | media
 download_media.py           persists top videos to media/ for inline play
-media/<p>/<content_id>.mp4|.jpg   downloaded top-viral clip media; ref_*.mp4 for references
+media/<p>/<content_id>.mp4|.jpg   downloaded tier-gated top clip media (per niche_config virality.media_filter); ref_*.mp4 for references
 renders/<p>/<render_id>/    producer-GENERATED reels (reel.mp4 + poster.jpg + render.json); render_id derived server-side from the studio filename. STRICTLY separate from media/ (scraped corpus); mounted at "/renders"
 studio/<p>/                 generated proposals (markdown) + meta.json sidecar + gate.jsonl
 analysis/<p>/                blueprints keyed <content_id>.json; ref_<hash>.json for references
@@ -231,12 +231,13 @@ Per-agent configuration lives on the hub, not in each agent's own repo:
 
 - `GET /api/config/agent/{agent}` — read config, with defaults populated from the agent's
   registered manifest `config_schema`.
-- `PUT /api/config/agent/{agent}` — write config; the Dashboard renders a schema-driven form from
-  the same `config_schema`.
+- `PUT /api/config/agent/{agent}` — write config; the Dashboard renders **one consolidated,
+  schema-driven form** ("Keys & models", in the Config section) from every registered agent's
+  `config_schema` — not a separate config form per agent board.
 
 Every agent fetches its config at the start of a run and merges it over local defaults, so an
-operator can retune an agent (thresholds, cadence, feature flags) from the Dashboard without
-touching that agent's code.
+operator can retune an agent (thresholds, cadence, feature flags) from the Dashboard's single
+consolidated config modal without touching that agent's code.
 
 ### Secrets by name
 

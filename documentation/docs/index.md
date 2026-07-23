@@ -65,7 +65,7 @@ flowchart LR
 | **Sources** | `pages.txt` (human-curated or auto-search-approved) | The handle list a scrape run consumes |
 | **Scrape** | ReelScraper | Raw per-post JSON — metrics, captions, media URLs |
 | **Analyze / Score** | ReelScraper's 4-signal virality engine | Percentile-normalized `virality_score` (0–100) + tier per post |
-| **Media** | ReelScraper | Downloaded video + thumbnail for top-viral clips, `media/<platform>/<content_id>.mp4` |
+| **Media** | ReelScraper | Downloaded video + thumbnail for tier-gated top clips (per `virality.media_filter`), `media/<platform>/<content_id>.mp4` |
 | **Blueprint** | AnalysisEngine | Schema-2 blueprint via `POST /api/analysis/{platform}` — shots, characters, text overlays, regeneration guide |
 | **Propose** | The producer declaring `proposes: true` (SimilarContent today) | Ranks winners by how cheap they are to remake, joins each to its blueprint, and writes a recipe. Free, and the last stage the cascade can fire unattended |
 | **Studio** | `POST /api/studio/{platform}` + the human gate | Markdown proposals, approved or rejected by a person before anything is posted or rendered |

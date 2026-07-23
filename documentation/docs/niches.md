@@ -32,9 +32,10 @@ platforms:
   instagram:
     reels_per_creator: 100           # per-creator scrape limit
                                      # (x: posts_per_creator, youtube: shorts_per_creator)
-    discovery:                       # instagram-only keyword/seed discovery (OFF by default)
-      keywords: [fashion, ootd, ...] # relevance keywords for auto-discovery
-      seeds: []                      # seed profiles to expand from
+    discovery:                       # instagram-only keyword discovery (OFF by default)
+      keywords: [fashion, ootd, ...] # relevance keywords for auto-discovery — the ONLY
+                                     # discovery field the live AutoSearch agent reads
+      seeds: []                      # LEGACY: read only by the superseded offline discover.py
     weights:                         # the 4 virality signals (auto-normalized to sum to 1)
       reach_multiplier: 0.35         #   plays / followers
       outlier_score:    0.25         #   plays / that creator's median plays
@@ -50,6 +51,25 @@ platforms:
   x:      { ... same knobs ... }
   youtube:{ ... same knobs ... }
 ```
+
+!!! note "Discovery: only `keywords` is live"
+    The live discovery agent is **AutoSearch** (reached through the hub's Discover stage), and it
+    reads **only `discovery.keywords`**. The other `discovery.*` fields (`seeds`, and any legacy
+    `search_terms`/`per_query`/`min_followers`/`guest_only` mechanics) are **legacy** — read only
+    by the superseded offline `platforms/instagram/discover.py`. They have **not** been removed:
+    `niches/fashion.yaml` still carries `keywords` **and** `seeds`, and AutoSearch's own runtime
+    knobs (caps, `guest_only`, the `discovery_enabled` kill-switch, optional Gemini term-expansion)
+    live on the auto-search agent config (`GET/PUT /api/config/agent/auto-search`). Only the
+    shipped `niche_config.json` has been trimmed to a **keywords-only** `discovery` block.
+
+!!! tip "The media tier gate — `virality.media_filter`"
+    `niche_config.json`'s `virality.media_filter` decides **which clips get their video downloaded
+    and sent to (paid) analysis**: `min_tier` (a label from `tiers`), optional `min_score` (a
+    numeric override of that tier's cutoff), and optional `max_downloads` (a cap applied *after*
+    the gate). Widen `min_tier` (e.g. `High`) to analyze more; tighten it (e.g. `Viral`) to spend
+    less. It is a live per-niche knob today but currently lives **only in `niche_config.json`** —
+    it is not part of the `*.yaml` schema or the `new-niche.sh` generator, so a freshly generated
+    niche inherits the value already present in the preserved config file.
 
 ### Niche-specific vs fixed fields
 
