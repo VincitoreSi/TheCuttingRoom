@@ -146,25 +146,38 @@ function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
           <IconConfig size={14} /> Configure
         </Button>
         {registerTarget === p.name && (
-          <div className="modal-scrim fixed inset-0 z-50 flex items-center justify-center"
-               onClick={() => setRegisterTarget(null)}>
-            <div className="p-6 rounded-lg shadow-xl max-w-sm w-full"
-                 style={{ background: "var(--surface)", border: "1px solid var(--line-strong)", borderRadius: "var(--r-lg)" }}
-                 onClick={(e) => e.stopPropagation()}>
+          <div
+            className="modal-scrim fixed inset-0 z-50 flex items-center justify-center"
+            onClick={() => setRegisterTarget(null)}
+          >
+            <div
+              className="p-6 rounded-lg shadow-xl max-w-sm w-full"
+              style={{
+                background: "var(--surface)",
+                border: "1px solid var(--line-strong)",
+                borderRadius: "var(--r-lg)",
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
               <h3 className="font-display text-lg mb-2">{humanizeAgent(p.name)}</h3>
               <p className="text-sm mb-4" style={{ color: "var(--ink-2)" }}>
-                This agent hasn't registered yet. Register it now to adjust its settings
-                before the first run.
+                This agent hasn't registered yet. Register it now to adjust its settings before the
+                first run.
               </p>
               <div className="flex gap-2 justify-end">
-                <Button variant="ghost" size="sm"
-                        onClick={() => setRegisterTarget(null)}>Cancel</Button>
-                <Button size="sm"
-                        onClick={async () => {
-                          await registerAgent.mutateAsync(p.name);
-                          setRegisterTarget(null);
-                          setOpenFor(p.name);
-                        }}>Register {'\u0026'} Configure</Button>
+                <Button variant="ghost" size="sm" onClick={() => setRegisterTarget(null)}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    await registerAgent.mutateAsync(p.name);
+                    setRegisterTarget(null);
+                    setOpenFor(p.name);
+                  }}
+                >
+                  Register {"\u0026"} Configure
+                </Button>
               </div>
             </div>
           </div>
@@ -213,7 +226,6 @@ function AgentKeysModels({ agent: p }: { agent: AgentRosterEntry }) {
             </div>
           )}
         </div>
-
       </div>
 
       {openFor && <AgentConfigModal agent={openFor} onClose={() => setOpenFor(null)} />}
