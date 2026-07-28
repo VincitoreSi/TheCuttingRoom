@@ -21,7 +21,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.101.4",
     "@tanstack/react-virtual": "^3.14.7",
-    "framer-motion": "^11.15.0",
+    "framer-motion": "^12.43.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "recharts": "^3.10.0"
